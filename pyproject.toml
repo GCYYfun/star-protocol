@@ -1,0 +1,31 @@
+[project]
+name = "star-protocol"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "psutil>=5.9.0",
+    "pyjwt>=2.10.1",
+    "rich>=14.1.0",
+    "toml>=0.10.2",
+    "websockets>=11.0",
+    "menglong",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "star-protocol",
+]
+
+[tool.uv.sources]
+star-protocol = { workspace = true }
+menglong = { path = "../MengLong" }
+
+# CLI 工具入口点
+[project.scripts]
+star-protocol-cli = "star_protocol_cli.cli:sync_main"
