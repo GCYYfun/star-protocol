@@ -6,15 +6,14 @@ Star Protocol Agent 演示
 """
 
 import asyncio
-import logging
 import random
 import signal
 import sys
+import platform
 from typing import Dict, List, Any, Optional
 from star_protocol.client import AgentClient
 from star_protocol.protocol import Message
-from star_protocol.utils.logger import setup_logging
-from star_protocol.monitor.simple_monitor import get_monitor, set_rich_mode
+from star_protocol.monitor.simple_monitor import get_monitor
 
 from menglong import Model, ChatAgent
 from menglong.agents.component.tool_manager import tool
@@ -22,13 +21,7 @@ from menglong.agents.component.tool_manager import tool
 
 class AgentDemo:
     """
-    Agent演示类 - 负责通信层管理
-
-    这个类作为智能Agent和Star Protocol通信层之间的桥梁。
-    要替换为其他LLM Agent，只需要：
-    1. 创建新的Agent类，实现相同的接口（handle_action_outcome, handle_environment_event等）
-    2. 替换 self.agent = IntelligentAgent(...) 为新的Agent实例
-    3. 确保新Agent使用相同的回调函数接口
+    Agent演示类
     """
 
     def __init__(
@@ -38,8 +31,8 @@ class AgentDemo:
         self.env_id = env_id
         self.port = port
 
-        # 创建 agent client
-        self.client = AgentClient(
+        # 创建自定义 agent client
+        self.client = DemoAgentClient(
             agent_id=self.agent_id, env_id=env_id, port=port, validate_messages=True
         )
 
@@ -48,7 +41,6 @@ class AgentDemo:
         self.running = False
 
         # 初始化monitor
-        set_rich_mode()
         self.monitor = get_monitor(f"agent_{self.agent_id}")
         self.monitor.set_status("正在初始化")
 
@@ -59,12 +51,52 @@ class AgentDemo:
             log_callback=self.log_message,
         )
 
-        # 设置消息处理器
-        self.setup_handlers()
+        # 将 agent 实例传递给客户端
+        self.client.set_agent_instance(self.agent)
 
         # 交互模式相关
         self.interactive_mode = False
         self.command_queue = asyncio.Queue()
+
+
+class DemoAgentClient(AgentClient):
+    """
+    演示用的自定义 Agent 客户端
+
+    继承 AgentClient 并覆盖消息处理方法
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.agent_instance = None
+
+    def set_agent_instance(self, agent_instance):
+        """设置 agent 实例"""
+        self.agent_instance = agent_instance
+
+    async def on_outcome(self, payload, message):
+        """处理动作结果"""
+        # 调用默认处理
+        await super().on_outcome(payload, message)
+
+        # 调用 agent 实例的处理方法
+        if self.agent_instance:
+            try:
+                await self.agent_instance.handle_action_outcome(payload)
+            except Exception as e:
+                self.monitor.error(f"Error in agent outcome handling: {e}")
+
+    async def on_event(self, payload, message):
+        """处理环境事件"""
+        # 调用默认处理
+        await super().on_event(payload, message)
+
+        # 调用 agent 实例的处理方法
+        if self.agent_instance:
+            try:
+                await self.agent_instance.handle_environment_event(payload)
+            except Exception as e:
+                self.monitor.error(f"Error in agent event handling: {e}")
 
     async def send_action(self, action: str, parameters: dict) -> str:
         """发送动作（回调函数）"""
@@ -93,50 +125,6 @@ class AgentDemo:
             self.monitor.error(message)
         else:
             self.monitor.info(message)
-
-    def setup_handlers(self):
-        """设置消息处理器"""
-
-        # 设置外层协议处理器
-        @self.client.on_message()
-        async def handle_message(message: Message):
-            """处理message协议 - 分发到内层处理器"""
-            try:
-                payload = message.payload
-
-                # 获取内层消息类型
-                message_type = None
-                if isinstance(payload, dict):
-                    message_type = payload.get("type")
-                elif hasattr(payload, "type"):
-                    message_type = payload.type
-
-                if message_type == "outcome":
-                    await self.agent.handle_action_outcome(payload)
-                elif message_type == "event":
-                    self.monitor.success(f"Received event: {payload}")
-                    # await self.agent.handle_environment_event(payload)
-                elif message_type == "action":
-                    # Agent通常不处理action消息，但可以记录
-                    self.monitor.debug(f"Received action message: {payload}")
-                elif message_type == "stream":
-                    # 处理流消息
-                    self.monitor.debug(f"Received stream message: {payload}")
-                else:
-                    self.monitor.warning(f"Unknown inner message type: {message_type}")
-
-            except Exception as e:
-                self.monitor.error(f"Error handling message: {e}")
-
-        @self.client.on_error()
-        async def handle_error(message: Message):
-            """处理error协议"""
-            self.monitor.error(f"Received error: {message.payload}")
-
-        @self.client.on_heartbeat()
-        async def handle_heartbeat(message: Message):
-            """处理heartbeat协议"""
-            self.monitor.debug("Received heartbeat")
 
     async def start_interactive_mode(self):
         """启动交互模式"""
@@ -395,16 +383,26 @@ class AgentDemo:
             tasks.append(behavior_task)
 
         try:
-            # 等待中断信号
+            # 等待中断信号 - 跨平台处理
             stop_event = asyncio.Event()
 
             def signal_handler():
                 self.monitor.warning(f"\n📴 Agent {self.agent_id} 收到停止信号...")
                 stop_event.set()
 
+            # 跨平台信号处理
             loop = asyncio.get_event_loop()
-            for sig in [signal.SIGINT, signal.SIGTERM]:
-                loop.add_signal_handler(sig, signal_handler)
+            if platform.system() == "Windows":
+                # Windows 系统只支持 SIGINT (Ctrl+C)
+                try:
+                    loop.add_signal_handler(signal.SIGINT, signal_handler)
+                except NotImplementedError:
+                    # 如果不支持信号处理，依赖 KeyboardInterrupt
+                    self.monitor.debug("Windows: 使用 KeyboardInterrupt 处理停止信号")
+            else:
+                # Unix-like 系统 (Linux, macOS, etc.)
+                loop.add_signal_handler(signal.SIGINT, signal_handler)
+                loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
             # 在交互模式下，如果用户切换到自动模式，需要重新启动行为循环
             while self.running:
@@ -425,6 +423,14 @@ class AgentDemo:
         finally:
             self.running = False
             self.interactive_mode = False
+
+            # 清理信号处理器
+            try:
+                if platform.system() != "Windows":
+                    loop.remove_signal_handler(signal.SIGINT)
+                    loop.remove_signal_handler(signal.SIGTERM)
+            except Exception:
+                pass
 
             # 取消所有任务
             for task in tasks:
@@ -578,9 +584,6 @@ async def main():
 
     args = parser.parse_args()
 
-    # 设置日志
-    setup_logging("INFO")
-
     monitor = get_monitor("agent_demo")
     monitor.success("=" * 50)
     monitor.success("🤖 Star Protocol Agent Demo")
@@ -596,14 +599,21 @@ async def main():
 
 
 if __name__ == "__main__":
+    # 在 Windows 上设置事件循环策略以避免一些问题
+    if platform.system() == "Windows":
+        try:
+            # 使用 ProactorEventLoop 在 Windows 上获得更好的性能
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        except AttributeError:
+            # 如果没有 WindowsProactorEventLoopPolicy，使用默认策略
+            pass
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-
         monitor = get_monitor("agent_demo")
         monitor.info("\n👋 再见!")
     except Exception as e:
-
         monitor = get_monitor("agent_demo")
         monitor.error(f"❌ 程序异常退出: {e}")
         sys.exit(1)

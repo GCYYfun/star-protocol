@@ -390,7 +390,9 @@ monitor_manager = MonitorManager()
 
 
 # 便捷函数
-def get_monitor(source: str, mode: Optional[OutputMode] = None) -> BaseMonitor:
+def get_monitor(
+    source: str, mode: Optional[OutputMode] = OutputMode.RICH
+) -> BaseMonitor:
     """获取监控器的便捷函数"""
     return monitor_manager.get_monitor(source, mode)
 

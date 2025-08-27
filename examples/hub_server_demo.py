@@ -6,11 +6,9 @@ Star Protocol Hub 服务器演示
 """
 
 import asyncio
-import logging
 import signal
 import sys
 from star_protocol.hub import StarHubServer
-from star_protocol.utils.logger import setup_logging
 from star_protocol.monitor import get_monitor, set_rich_mode
 
 
@@ -29,7 +27,6 @@ class HubServerDemo:
         self.running = False
 
         # 初始化监控
-        set_rich_mode()
         self.monitor = get_monitor("hub_server_demo")
 
     async def start(self):
@@ -64,10 +61,25 @@ class HubServerDemo:
                 self.monitor.warning("\n📴 收到停止信号，正在关闭服务器...")
                 stop_event.set()
 
-            # 设置信号处理
-            loop = asyncio.get_event_loop()
-            for sig in [signal.SIGINT, signal.SIGTERM]:
-                loop.add_signal_handler(sig, signal_handler)
+            loop = asyncio.get_running_loop()
+            if sys.platform == "win32":
+                # Windows不支持add_signal_handler，使用线程方式监听KeyboardInterrupt
+                async def windows_signal_wait():
+                    try:
+                        while not stop_event.is_set():
+                            await asyncio.sleep(1)
+                    except KeyboardInterrupt:
+                        signal_handler()
+
+                monitor_task2 = asyncio.create_task(windows_signal_wait())
+            else:
+                for sig in [signal.SIGINT, signal.SIGTERM]:
+                    try:
+                        loop.add_signal_handler(sig, signal_handler)
+                    except NotImplementedError:
+                        self.monitor.warning(
+                            f"⚠️ 当前平台不支持信号处理（{sig}），请使用 Ctrl+C 退出。"
+                        )
 
             await stop_event.wait()
 
@@ -126,9 +138,6 @@ async def main():
     parser.add_argument("--port", type=int, default=9999, help="Port number")
 
     args = parser.parse_args()
-
-    # 设置日志
-    setup_logging("INFO")
 
     # 创建并启动服务器
     demo = HubServerDemo(args.host, args.port)

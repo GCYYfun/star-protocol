@@ -10,6 +10,7 @@ import logging
 import random
 import signal
 import sys
+import platform
 from typing import Dict, List, Any, Optional
 from star_protocol.client import EnvironmentClient
 from star_protocol.protocol import Message
@@ -361,21 +362,40 @@ class EnvironmentDemo:
         world_update_task = asyncio.create_task(self.world_update_loop())
 
         try:
-            # 等待中断信号
+            # 等待中断信号 - 跨平台处理
             stop_event = asyncio.Event()
 
             def signal_handler():
                 self.monitor.warning("\n📴 收到停止信号...")
                 stop_event.set()
 
+            # 跨平台信号处理
             loop = asyncio.get_event_loop()
-            for sig in [signal.SIGINT, signal.SIGTERM]:
-                loop.add_signal_handler(sig, signal_handler)
+            if platform.system() == "Windows":
+                # Windows 系统只支持 SIGINT (Ctrl+C)
+                try:
+                    loop.add_signal_handler(signal.SIGINT, signal_handler)
+                except NotImplementedError:
+                    # 如果不支持信号处理，依赖 KeyboardInterrupt
+                    self.monitor.debug("Windows: 使用 KeyboardInterrupt 处理停止信号")
+            else:
+                # Unix-like 系统 (Linux, macOS, etc.)
+                loop.add_signal_handler(signal.SIGINT, signal_handler)
+                loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
             await stop_event.wait()
 
         finally:
             self.running = False
+
+            # 清理信号处理器
+            try:
+                if platform.system() != "Windows":
+                    loop.remove_signal_handler(signal.SIGINT)
+                    loop.remove_signal_handler(signal.SIGTERM)
+            except Exception:
+                pass
+
             world_update_task.cancel()
             await self.client.disconnect()
             self.monitor.success("✅ 环境已停止")
@@ -427,13 +447,21 @@ async def main():
 
 
 if __name__ == "__main__":
+    # 在 Windows 上设置事件循环策略以避免一些问题
+    if platform.system() == "Windows":
+        try:
+            # 使用 ProactorEventLoop 在 Windows 上获得更好的性能
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        except AttributeError:
+            # 如果没有 WindowsProactorEventLoopPolicy，使用默认策略
+            pass
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         monitor = get_monitor("environment_demo")
         monitor.info("\n👋 再见!")
     except Exception as e:
-
         monitor = get_monitor("environment_demo")
         monitor.error(f"❌ 程序异常退出: {e}")
         sys.exit(1)
