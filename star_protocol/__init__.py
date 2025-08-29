@@ -1,152 +1,33 @@
 """
-Star Protocol - Python SDK
+Star Protocol V3 - agent通信协议
 
-/ Agent, Environment, Human & Hub Components
+主要组件：
+- protocol: 核心协议定义和序列化
+- client: 各类客户端 SDK (Agent, Environment, Human)
+- hub: 中央路由服务器
+- monitor: 独立可插拔的监控工具
+- cli: 交互式命令行工具
+- utils: 通用工具和配置
 """
 
-__version__ = "1.0.0"
-__author__ = "Star Protocol Team"
-__description__ = "Real-time multi-agent communication protocol SDK"
+__version__ = "3.0.0"
 
-# Protocol core
-from .protocol import (
-    # Enums and data classes
-    ClientType,
-    MessageType,
-    PayloadType,
-    OutcomeType,
-    ClientInfo,
-    Message,
-    ActionPayload,
-    OutcomePayload,
-    EventPayload,
-    StreamPayload,
-    ConnectionRequest,
-    ErrorPayload,
-    # Message utilities
-    MessageBuilder,
-    MessageParser,
-    BroadcastHelper,
-    # Validation services
-    MessageValidationService,
-    ValidationError,
-    PermissionError,
-)
-
-# Clients
-from .client import (
-    BaseStarClient,
-    AgentClient,
-    EnvironmentClient,
-    HumanClient,
-    EventHandler,
-    AsyncEventHandler,
-)
-
-# Hub server
-from .hub import (
-    StarHubServer,
-    SessionManager,
-    MessageRouter,
-    AuthenticationService,
-    run_server,
-)
-
-# Utilities
-from .utils import setup_logging, get_config, init_config, StarProtocolConfig, LogLevel
-
-# Exceptions
-from .exceptions import (
-    StarProtocolError,
-    ConnectionError,
-    AuthenticationError,
-    MessageError,
-    ClientError,
-    EnvironmentError,
-    ServerError,
-)
+# 子模块 (稍后实现具体类)
+from . import protocol
+from . import client
+from . import hub
+from . import monitor
+from . import cli
+from . import utils
 
 __all__ = [
-    # Version info
+    # 版本
     "__version__",
-    "__author__",
-    "__description__",
-    # Protocol core
-    "ClientType",
-    "MessageType",
-    "PayloadType",
-    "OutcomeType",
-    "ClientInfo",
-    "Message",
-    "ActionPayload",
-    "OutcomePayload",
-    "EventPayload",
-    "StreamPayload",
-    "ConnectionRequest",
-    "ErrorPayload",
-    "MessageBuilder",
-    "MessageParser",
-    "BroadcastHelper",
-    "MessageValidationService",
-    "ValidationError",
-    "PermissionError",
-    # Clients
-    "BaseStarClient",
-    "AgentClient",
-    "EnvironmentClient",
-    "HumanClient",
-    "EventHandler",
-    "AsyncEventHandler",
-    # Hub server
-    "StarHubServer",
-    "SessionManager",
-    "MessageRouter",
-    "AuthenticationService",
-    "run_server",
-    # Utils
-    "setup_logging",
-    "get_config",
-    "init_config",
-    "StarProtocolConfig",
-    "LogLevel",
-    # Exceptions
-    "StarProtocolError",
-    "ConnectionError",
-    "AuthenticationError",
-    "MessageError",
-    "ClientError",
-    "EnvironmentError",
-    "ServerError",
+    # 子模块
+    "protocol",
+    "client",
+    "hub",
+    "monitor",
+    "cli",
+    "utils",
 ]
-
-
-def get_version() -> str:
-    """Get the current version of the Star Protocol SDK."""
-    return __version__
-
-
-def create_agent_client(server_url: str, agent_id: str, env_id: str) -> AgentClient:
-    """Create a new Agent client instance."""
-    return AgentClient(server_url, agent_id, env_id)
-
-
-def create_environment_client(server_url: str, env_id: str) -> EnvironmentClient:
-    """Create a new Environment client instance."""
-    return EnvironmentClient(server_url, env_id)
-
-
-def create_human_client(server_url: str, user_id: str) -> HumanClient:
-    """Create a new Human client instance."""
-    return HumanClient(server_url, user_id)
-
-
-def create_hub_server(host: str = "localhost", port: int = 8765) -> StarHubServer:
-    """Create a new Hub server instance."""
-    return StarHubServer(host, port)
-
-
-# Aliases
-Agent = AgentClient
-Environment = EnvironmentClient
-Human = HumanClient
-Hub = StarHubServer

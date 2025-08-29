@@ -1,33 +1,19 @@
 """
-Star Protocol 监控系统
+监控和指标模块
 
-提供简单统一的输出管理和状态查看功能
+独立的可插拔监控工具：
+- 指标收集器
+- 简单监控实现
 """
 
-from .simple_monitor import (
-    BaseMonitor,
-    RichMonitor,
-    OutputLevel,
-    OutputMode,
-    LogEntry,
-    create_monitor,
-    MonitorManager,
-    monitor_manager,
-    get_monitor,
-    set_rich_mode,
-    set_base_mode,
-)
+from .metrics import MetricsCollector, MetricsBackend, MemoryBackend
+from .simple_monitor import SimpleMonitor, FileBackend, create_simple_monitor
 
 __all__ = [
-    "BaseMonitor",
-    "RichMonitor",
-    "OutputLevel",
-    "OutputMode",
-    "LogEntry",
-    "create_monitor",
-    "MonitorManager",
-    "monitor_manager",
-    "get_monitor",
-    "set_rich_mode",
-    "set_base_mode",
+    "MetricsCollector",
+    "MetricsBackend",
+    "MemoryBackend",
+    "SimpleMonitor",
+    "FileBackend",
+    "create_simple_monitor",
 ]

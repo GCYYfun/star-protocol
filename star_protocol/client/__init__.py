@@ -1,18 +1,20 @@
 """
-Star Protocol Client Module
+Client SDK 模块
 
-Client implementations for Agent, Environment and Human components
+提供所有客户端实现：
+- 基础客户端
+- Agent 客户端
+- Environment 客户端
+- Human 客户端
 """
 
-from .base import BaseStarClient, EventHandler, AsyncEventHandler
+from .base import BaseClient
 from .agent import AgentClient
 from .environment import EnvironmentClient
 from .human import HumanClient
 
 __all__ = [
-    "BaseStarClient",
-    "EventHandler",
-    "AsyncEventHandler",
+    "BaseClient",
     "AgentClient",
     "EnvironmentClient",
     "HumanClient",

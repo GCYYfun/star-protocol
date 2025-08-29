@@ -1,62 +1,51 @@
-"""
-Star Protocol Protocol Module
+"""Star Protocol 协议核心模块"""
 
-Protocol definitions and message handling utilities
-"""
-
-from .types import (
-    ClientType,
-    MessageType,
-    PayloadType,
-    OutcomeType,
-    ClientInfo,
-    ActionPayload,
-    OutcomePayload,
-    EventPayload,
-    StreamPayload,
-    Message,
-    ConnectionRequest,
-    ErrorPayload,
-    PayloadUnion,
+from .exceptions import (
+    ProtocolException,
+    ValidationException,
+    SerializationException,
+    MessageFormatException,
 )
-
+from .types import EnvelopeType, MessageType, ClientType
 from .messages import (
-    MessageBuilder,
-    MessageParser,
-    BroadcastHelper,
-)
-
-from .validation import (
-    ValidationError,
-    PermissionError,
-    MessageValidator,
-    PermissionValidator,
-    MessageValidationService,
+    # 消息类型
+    ActionMessage,
+    OutcomeMessage,
+    EventMessage,
+    StreamMessage,
+    RegistrationMessage,
+    Message,  # Union 类型
+    # 其他类
+    Envelope,
+    ClientInfo,
+    HeartbeatInfo,
+    ErrorInfo,
+    # 工厂函数
+    message_from_dict,
 )
 
 __all__ = [
-    # Types
-    "ClientType",
+    # 异常类
+    "ProtocolException",
+    "ValidationException",
+    "SerializationException",
+    "MessageFormatException",
+    # 类型枚举
+    "EnvelopeType",
     "MessageType",
-    "PayloadType",
-    "OutcomeType",
+    "ClientType",
+    # 消息类型
+    "ActionMessage",
+    "OutcomeMessage",
+    "EventMessage",
+    "StreamMessage",
+    "RegistrationMessage",
+    "Message",  # Union 类型
+    # 其他类
+    "Envelope",
     "ClientInfo",
-    "ActionPayload",
-    "OutcomePayload",
-    "EventPayload",
-    "StreamPayload",
-    "Message",
-    "ConnectionRequest",
-    "ErrorPayload",
-    "PayloadUnion",
-    # Message utilities
-    "MessageBuilder",
-    "MessageParser",
-    "BroadcastHelper",
-    # Validation
-    "ValidationError",
-    "PermissionError",
-    "MessageValidator",
-    "PermissionValidator",
-    "MessageValidationService",
+    "HeartbeatInfo",
+    "ErrorInfo",
+    # 工厂函数
+    "message_from_dict",
 ]

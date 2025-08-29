@@ -19,9 +19,9 @@ class CLIIntegration:
         cli.update_context("hub_server", hub_server)
 
         # 加载 Hub 相关插件
-        plugins_dir = Path(__file__).parent / "plugins_examples"
-        cli.plugin_manager.add_plugin_path(str(plugins_dir))
-        cli.plugin_manager.load_plugin("hub_commands")
+        # plugins_dir = Path(__file__).parent / "plugins_examples"
+        # cli.plugin_manager.add_plugin_path(str(plugins_dir))
+        # cli.plugin_manager.load_plugin("hub_commands")
 
     @staticmethod
     def integrate_with_agent(cli: InteractiveCLI, agent) -> None:
@@ -41,9 +41,9 @@ class CLIIntegration:
         cli.update_context("environment", environment)
 
         # 加载 Environment 相关插件
-        plugins_dir = Path(__file__).parent / "plugins_examples"
-        cli.plugin_manager.add_plugin_path(str(plugins_dir))
-        cli.plugin_manager.load_plugin("environment_commands")
+        # plugins_dir = Path(__file__).parent / "plugins_examples"
+        # cli.plugin_manager.add_plugin_path(str(plugins_dir))
+        # cli.plugin_manager.load_plugin("environment_commands")
 
 
 def create_hub_cli(hub_server, app_name: str = "Hub Server") -> InteractiveCLI:

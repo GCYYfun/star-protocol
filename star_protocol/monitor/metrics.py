@@ -1,421 +1,359 @@
-"""
-监控指标系统
+"""Star Protocol 指标收集器"""
 
-提供性能指标收集、聚合和分析功能
-"""
-
-from enum import Enum
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union, Callable
-from collections import defaultdict, deque
-import statistics
-import threading
 import time
-
-
-class MetricType(Enum):
-    """指标类型"""
-
-    # 计数器 - 累积值
-    COUNTER = "counter"
-
-    # 仪表 - 当前值
-    GAUGE = "gauge"
-
-    # 直方图 - 分布统计
-    HISTOGRAM = "histogram"
-
-    # 摘要 - 分位数统计
-    SUMMARY = "summary"
-
-    # 计时器 - 时间测量
-    TIMER = "timer"
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from ..protocol import Envelope, ClientInfo, MessageType, ClientType
+from ..utils import get_logger
 
 
 @dataclass
-class Metric:
-    """指标数据"""
+class MetricPoint:
+    """指标数据点"""
 
-    name: str
-    metric_type: MetricType
-    value: Union[float, int]
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: float
+    value: Any
     labels: Dict[str, str] = field(default_factory=dict)
-    unit: str = ""
-    description: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
+
+@dataclass
+class ConnectionMetric:
+    """连接指标"""
+
+    client_id: str
+    client_type: ClientType
+    env_id: Optional[str]
+    connected_at: float
+    disconnected_at: Optional[float] = None
+
+    @property
+    def duration(self) -> Optional[float]:
+        """连接持续时间"""
+        if self.disconnected_at:
+            return self.disconnected_at - self.connected_at
+        return time.time() - self.connected_at
+
+
+@dataclass
+class MessageMetric:
+    """消息指标"""
+
+    envelope_type: str
+    sender_id: str
+    recipient_id: Optional[str]
+    timestamp: float
+    envelope_size: int
+
+    @property
+    def labels(self) -> Dict[str, str]:
+        """指标标签"""
         return {
-            "name": self.name,
-            "type": self.metric_type.value,
-            "value": self.value,
-            "timestamp": self.timestamp.isoformat(),
-            "labels": self.labels,
-            "unit": self.unit,
-            "description": self.description,
+            "envelope_type": self.envelope_type,
+            "recipient": self.recipient_id or "broadcast",
         }
 
 
-@dataclass
-class MetricSummary:
-    """指标摘要统计"""
+class MetricsBackend(ABC):
+    """指标后端抽象接口"""
 
-    name: str
-    count: int
-    sum_value: float
-    min_value: float
-    max_value: float
-    avg_value: float
-    median_value: float
-    p95_value: float
-    p99_value: float
-    last_updated: datetime
+    @abstractmethod
+    async def record_connection(self, metric: ConnectionMetric) -> None:
+        """记录连接指标"""
+        pass
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
+    @abstractmethod
+    async def record_envelope(self, metric: MessageMetric) -> None:
+        """记录信封指标"""
+        pass
+
+    @abstractmethod
+    async def record_counter(
+        self, name: str, value: float, labels: Dict[str, str] = None
+    ) -> None:
+        """记录计数器指标"""
+        pass
+
+    @abstractmethod
+    async def record_gauge(
+        self, name: str, value: float, labels: Dict[str, str] = None
+    ) -> None:
+        """记录仪表指标"""
+        pass
+
+    @abstractmethod
+    async def record_histogram(
+        self, name: str, value: float, labels: Dict[str, str] = None
+    ) -> None:
+        """记录直方图指标"""
+        pass
+
+    @abstractmethod
+    async def export_metrics(self) -> Dict[str, Any]:
+        """导出指标数据"""
+        pass
+
+
+class MemoryBackend(MetricsBackend):
+    """内存后端实现"""
+
+    def __init__(self, max_points: int = 10000):
+        self.max_points = max_points
+
+        # 存储各种指标
+        self.connections: List[ConnectionMetric] = []
+        self.envelopes: List[MessageMetric] = []
+        self.counters: Dict[str, List[MetricPoint]] = {}
+        self.gauges: Dict[str, List[MetricPoint]] = {}
+        self.histograms: Dict[str, List[MetricPoint]] = {}
+
+    async def record_connection(self, metric: ConnectionMetric) -> None:
+        """记录连接指标"""
+        self.connections.append(metric)
+        # 限制存储数量
+        if len(self.connections) > self.max_points:
+            self.connections.pop(0)
+
+    async def record_envelope(self, metric: MessageMetric) -> None:
+        """记录信封指标"""
+        self.envelopes.append(metric)
+        # 限制存储数量
+        if len(self.envelopes) > self.max_points:
+            self.envelopes.pop(0)
+
+    async def record_counter(
+        self, name: str, value: float, labels: Dict[str, str] = None
+    ) -> None:
+        """记录计数器指标"""
+        if name not in self.counters:
+            self.counters[name] = []
+
+        point = MetricPoint(timestamp=time.time(), value=value, labels=labels or {})
+        self.counters[name].append(point)
+
+        # 限制存储数量
+        if len(self.counters[name]) > self.max_points:
+            self.counters[name].pop(0)
+
+    async def record_gauge(
+        self, name: str, value: float, labels: Dict[str, str] = None
+    ) -> None:
+        """记录仪表指标"""
+        if name not in self.gauges:
+            self.gauges[name] = []
+
+        point = MetricPoint(timestamp=time.time(), value=value, labels=labels or {})
+        self.gauges[name].append(point)
+
+        # 限制存储数量
+        if len(self.gauges[name]) > self.max_points:
+            self.gauges[name].pop(0)
+
+    async def record_histogram(
+        self, name: str, value: float, labels: Dict[str, str] = None
+    ) -> None:
+        """记录直方图指标"""
+        if name not in self.histograms:
+            self.histograms[name] = []
+
+        point = MetricPoint(timestamp=time.time(), value=value, labels=labels or {})
+        self.histograms[name].append(point)
+
+        # 限制存储数量
+        if len(self.histograms[name]) > self.max_points:
+            self.histograms[name].pop(0)
+
+    async def export_metrics(self) -> Dict[str, Any]:
+        """导出指标数据"""
         return {
-            "name": self.name,
-            "count": self.count,
-            "sum": self.sum_value,
-            "min": self.min_value,
-            "max": self.max_value,
-            "avg": self.avg_value,
-            "median": self.median_value,
-            "p95": self.p95_value,
-            "p99": self.p99_value,
-            "last_updated": self.last_updated.isoformat(),
+            "connections": [
+                {
+                    "client_id": conn.client_id,
+                    "client_type": conn.client_type.value,
+                    "env_id": conn.env_id,
+                    "connected_at": conn.connected_at,
+                    "disconnected_at": conn.disconnected_at,
+                    "duration": conn.duration,
+                }
+                for conn in self.connections
+            ],
+            "envelopes": [
+                {
+                    "envelope_type": env.envelope_type,
+                    "sender_id": env.sender_id,
+                    "recipient_id": env.recipient_id,
+                    "timestamp": env.timestamp,
+                    "envelope_size": env.envelope_size,
+                }
+                for env in self.envelopes
+            ],
+            "counters": {
+                name: [
+                    {
+                        "timestamp": point.timestamp,
+                        "value": point.value,
+                        "labels": point.labels,
+                    }
+                    for point in points
+                ]
+                for name, points in self.counters.items()
+            },
+            "gauges": {
+                name: [
+                    {
+                        "timestamp": point.timestamp,
+                        "value": point.value,
+                        "labels": point.labels,
+                    }
+                    for point in points
+                ]
+                for name, points in self.gauges.items()
+            },
+            "histograms": {
+                name: [
+                    {
+                        "timestamp": point.timestamp,
+                        "value": point.value,
+                        "labels": point.labels,
+                    }
+                    for point in points
+                ]
+                for name, points in self.histograms.items()
+            },
         }
 
 
 class MetricsCollector:
     """指标收集器"""
 
-    def __init__(
-        self,
-        source: str,
-        source_type: str,
-        max_history: int = 1000,
-        summary_window: int = 300,  # 5分钟窗口
-    ):
-        self.source = source
-        self.source_type = source_type
-        self.max_history = max_history
-        self.summary_window = summary_window
+    def __init__(self, backend: Optional[MetricsBackend] = None):
+        self.backend = backend or MemoryBackend()
+        self.logger = get_logger("star_protocol.monitor")
 
-        # 存储指标数据
-        self._metrics: Dict[str, deque] = defaultdict(lambda: deque(maxlen=max_history))
-        self._counters: Dict[str, float] = defaultdict(float)
-        self._gauges: Dict[str, float] = defaultdict(float)
-        self._timers: Dict[str, List[float]] = defaultdict(list)
+        # 内部计数器
+        self._envelope_sent_count = 0
+        self._envelope_received_count = 0
+        self._envelope_routed_count = 0
+        self._active_connections = 0
 
-        # 线程锁
-        self._lock = threading.RLock()
+    async def record_client_connected(self, client_info: ClientInfo) -> None:
+        """记录客户端连接"""
+        metric = ConnectionMetric(
+            client_id=client_info.client_id,
+            client_type=client_info.client_type,
+            env_id=client_info.env_id,
+            connected_at=time.time(),
+        )
 
-        # 回调函数
-        self._metric_callbacks: List[Callable[[Metric], None]] = []
+        await self.backend.record_connection(metric)
 
-    def add_callback(self, callback: Callable[[Metric], None]) -> None:
-        """添加指标回调"""
-        with self._lock:
-            self._metric_callbacks.append(callback)
+        self._active_connections += 1
+        await self.backend.record_gauge("active_connections", self._active_connections)
 
-    def remove_callback(self, callback: Callable[[Metric], None]) -> None:
-        """移除指标回调"""
-        with self._lock:
-            if callback in self._metric_callbacks:
-                self._metric_callbacks.remove(callback)
+        # 按类型计数
+        await self.backend.record_counter(
+            "client_connections_total",
+            1,
+            {"client_type": client_info.client_type.value},
+        )
 
-    def _notify_callbacks(self, metric: Metric) -> None:
-        """通知回调函数"""
-        for callback in self._metric_callbacks:
-            try:
-                callback(metric)
-            except Exception:
-                pass  # 忽略回调异常
+        self.logger.debug(f"记录客户端连接: {client_info.client_id}")
 
-    def increment_counter(
-        self,
-        name: str,
-        value: float = 1.0,
-        labels: Optional[Dict[str, str]] = None,
-        **kwargs,
+    async def record_client_disconnected(self, client_id: str) -> None:
+        """记录客户端断开连接"""
+        # 更新连接指标中的断开时间
+        for conn in self.backend.connections:
+            if conn.client_id == client_id and conn.disconnected_at is None:
+                conn.disconnected_at = time.time()
+                break
+
+        self._active_connections = max(0, self._active_connections - 1)
+        await self.backend.record_gauge("active_connections", self._active_connections)
+
+        await self.backend.record_counter("client_disconnections_total", 1)
+
+        self.logger.debug(f"记录客户端断开: {client_id}")
+
+    async def record_envelope_sent(self, envelope: Envelope) -> None:
+        """记录发送的信封"""
+        metric = MessageMetric(
+            envelope_type=envelope.envelope_type.value,
+            sender_id=envelope.sender,
+            recipient_id=envelope.recipient,
+            timestamp=envelope.timestamp or time.time(),
+            envelope_size=len(envelope.to_json()),
+        )
+
+        await self.backend.record_envelope(metric)
+
+        self._envelope_sent_count += 1
+        await self.backend.record_counter("envelopes_sent_total", 1, metric.labels)
+
+        await self.backend.record_histogram(
+            "envelope_size_bytes", metric.envelope_size, metric.labels
+        )
+
+    async def record_envelope_received(self, envelope: Envelope) -> None:
+        """记录接收的信封"""
+        self._envelope_received_count += 1
+
+        metric = MessageMetric(
+            envelope_type=envelope.envelope_type.value,
+            sender_id=envelope.sender,
+            recipient_id=envelope.recipient,
+            timestamp=envelope.timestamp or time.time(),
+            envelope_size=len(envelope.to_json()),
+        )
+
+        await self.backend.record_envelope(metric)
+
+        await self.backend.record_counter("envelopes_received_total", 1, metric.labels)
+
+    async def record_envelope_routed(self, envelope: Envelope) -> None:
+        """记录路由的信封"""
+        self._envelope_routed_count += 1
+
+        metric = MessageMetric(
+            envelope_type=envelope.envelope_type.value,
+            sender_id=envelope.sender,
+            recipient_id=envelope.recipient,
+            timestamp=envelope.timestamp or time.time(),
+            envelope_size=len(envelope.to_json()),
+        )
+
+        await self.backend.record_envelope(metric)
+
+        await self.backend.record_counter("envelopes_routed_total", 1, metric.labels)
+
+    async def record_custom_metric(
+        self, metric_type: str, name: str, value: float, labels: Dict[str, str] = None
     ) -> None:
-        """增加计数器"""
-        with self._lock:
-            key = self._get_metric_key(name, labels)
-            self._counters[key] += value
+        """记录自定义指标
 
-            metric = Metric(
-                name=name,
-                metric_type=MetricType.COUNTER,
-                value=self._counters[key],
-                labels=labels or {},
-                **kwargs,
-            )
-
-            self._metrics[key].append(metric)
-            self._notify_callbacks(metric)
-
-    def set_gauge(
-        self, name: str, value: float, labels: Optional[Dict[str, str]] = None, **kwargs
-    ) -> None:
-        """设置仪表值"""
-        with self._lock:
-            key = self._get_metric_key(name, labels)
-            self._gauges[key] = value
-
-            metric = Metric(
-                name=name,
-                metric_type=MetricType.GAUGE,
-                value=value,
-                labels=labels or {},
-                **kwargs,
-            )
-
-            self._metrics[key].append(metric)
-            self._notify_callbacks(metric)
-
-    def record_histogram(
-        self, name: str, value: float, labels: Optional[Dict[str, str]] = None, **kwargs
-    ) -> None:
-        """记录直方图值"""
-        with self._lock:
-            key = self._get_metric_key(name, labels)
-
-            metric = Metric(
-                name=name,
-                metric_type=MetricType.HISTOGRAM,
-                value=value,
-                labels=labels or {},
-                **kwargs,
-            )
-
-            self._metrics[key].append(metric)
-            self._notify_callbacks(metric)
-
-    def time_operation(self, name: str, labels: Optional[Dict[str, str]] = None):
-        """时间测量装饰器/上下文管理器"""
-        return TimerContext(self, name, labels)
-
-    def record_timer(
-        self,
-        name: str,
-        duration_ms: float,
-        labels: Optional[Dict[str, str]] = None,
-        **kwargs,
-    ) -> None:
-        """记录时间测量"""
-        with self._lock:
-            key = self._get_metric_key(name, labels)
-            self._timers[key].append(duration_ms)
-
-            # 限制历史记录大小
-            if len(self._timers[key]) > self.max_history:
-                self._timers[key] = self._timers[key][-self.max_history :]
-
-            metric = Metric(
-                name=name,
-                metric_type=MetricType.TIMER,
-                value=duration_ms,
-                labels=labels or {},
-                unit="ms",
-                **kwargs,
-            )
-
-            self._metrics[key].append(metric)
-            self._notify_callbacks(metric)
-
-    def get_metric_summary(
-        self, name: str, labels: Optional[Dict[str, str]] = None
-    ) -> Optional[MetricSummary]:
-        """获取指标摘要"""
-        with self._lock:
-            key = self._get_metric_key(name, labels)
-
-            if key not in self._metrics or not self._metrics[key]:
-                return None
-
-            # 获取窗口内的数据
-            cutoff_time = datetime.now() - timedelta(seconds=self.summary_window)
-            recent_metrics = [
-                m for m in self._metrics[key] if m.timestamp >= cutoff_time
-            ]
-
-            if not recent_metrics:
-                return None
-
-            values = [m.value for m in recent_metrics]
-
-            try:
-                return MetricSummary(
-                    name=name,
-                    count=len(values),
-                    sum_value=sum(values),
-                    min_value=min(values),
-                    max_value=max(values),
-                    avg_value=statistics.mean(values),
-                    median_value=statistics.median(values),
-                    p95_value=self._percentile(values, 95),
-                    p99_value=self._percentile(values, 99),
-                    last_updated=recent_metrics[-1].timestamp,
-                )
-            except Exception:
-                return None
-
-    def get_all_summaries(self) -> Dict[str, MetricSummary]:
-        """获取所有指标摘要"""
-        summaries = {}
-
-        with self._lock:
-            # 解析所有指标名称
-            metric_names = set()
-            for key in self._metrics.keys():
-                name = key.split("|")[0]  # 提取指标名称
-                metric_names.add(name)
-
-            for name in metric_names:
-                summary = self.get_metric_summary(name)
-                if summary:
-                    summaries[name] = summary
-
-        return summaries
-
-    def get_recent_metrics(
-        self,
-        name: Optional[str] = None,
-        limit: int = 100,
-        since: Optional[datetime] = None,
-    ) -> List[Metric]:
-        """获取最近的指标"""
-        with self._lock:
-            all_metrics = []
-
-            for key, metrics in self._metrics.items():
-                if name and not key.startswith(name):
-                    continue
-
-                for metric in metrics:
-                    if since and metric.timestamp < since:
-                        continue
-                    all_metrics.append(metric)
-
-            # 按时间排序
-            all_metrics.sort(key=lambda m: m.timestamp, reverse=True)
-
-            return all_metrics[:limit]
-
-    def clear_metrics(self, name: Optional[str] = None) -> None:
-        """清除指标数据"""
-        with self._lock:
-            if name:
-                # 清除特定指标
-                keys_to_clear = [k for k in self._metrics.keys() if k.startswith(name)]
-                for key in keys_to_clear:
-                    self._metrics[key].clear()
-                    if key in self._counters:
-                        del self._counters[key]
-                    if key in self._gauges:
-                        del self._gauges[key]
-                    if key in self._timers:
-                        del self._timers[key]
-            else:
-                # 清除所有指标
-                self._metrics.clear()
-                self._counters.clear()
-                self._gauges.clear()
-                self._timers.clear()
-
-    def _get_metric_key(self, name: str, labels: Optional[Dict[str, str]]) -> str:
-        """生成指标键"""
-        if not labels:
-            return name
-
-        label_str = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
-        return f"{name}|{label_str}"
-
-    @staticmethod
-    def _percentile(values: List[float], percentile: float) -> float:
-        """计算百分位数"""
-        if not values:
-            return 0.0
-
-        sorted_values = sorted(values)
-        k = (len(sorted_values) - 1) * percentile / 100
-        f = int(k)
-        c = k - f
-
-        if f == len(sorted_values) - 1:
-            return sorted_values[f]
+        Args:
+            metric_type: 指标类型 (counter, gauge, histogram)
+            name: 指标名称
+            value: 指标值
+            labels: 标签
+        """
+        if metric_type == "counter":
+            await self.backend.record_counter(name, value, labels)
+        elif metric_type == "gauge":
+            await self.backend.record_gauge(name, value, labels)
+        elif metric_type == "histogram":
+            await self.backend.record_histogram(name, value, labels)
         else:
-            return sorted_values[f] * (1 - c) + sorted_values[f + 1] * c
+            self.logger.warning(f"未知指标类型: {metric_type}")
 
+    async def export_metrics(self) -> Dict[str, Any]:
+        """导出所有指标"""
+        return await self.backend.export_metrics()
 
-class TimerContext:
-    """时间测量上下文管理器"""
-
-    def __init__(
-        self,
-        collector: MetricsCollector,
-        name: str,
-        labels: Optional[Dict[str, str]] = None,
-    ):
-        self.collector = collector
-        self.name = name
-        self.labels = labels
-        self.start_time = None
-
-    def __enter__(self):
-        self.start_time = time.time()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.start_time:
-            duration_ms = (time.time() - self.start_time) * 1000
-            self.collector.record_timer(self.name, duration_ms, self.labels)
-
-    def __call__(self, func):
-        """作为装饰器使用"""
-
-        def wrapper(*args, **kwargs):
-            with self:
-                return func(*args, **kwargs)
-
-        return wrapper
-
-
-# 预定义的常用指标名称
-class CommonMetrics:
-    """常用指标名称"""
-
-    # 连接指标
-    CONNECTIONS_TOTAL = "connections_total"
-    CONNECTIONS_ACTIVE = "connections_active"
-    CONNECTION_DURATION = "connection_duration_ms"
-    CONNECTION_ERRORS = "connection_errors_total"
-
-    # 消息指标
-    MESSAGES_SENT = "messages_sent_total"
-    MESSAGES_RECEIVED = "messages_received_total"
-    MESSAGE_SIZE = "message_size_bytes"
-    MESSAGE_LATENCY = "message_latency_ms"
-    MESSAGE_ERRORS = "message_errors_total"
-
-    # 性能指标
-    CPU_USAGE = "cpu_usage_percent"
-    MEMORY_USAGE = "memory_usage_mb"
-    MEMORY_USAGE_PERCENT = "memory_usage_percent"
-    RESPONSE_TIME = "response_time_ms"
-    THROUGHPUT = "throughput_ops_per_sec"
-
-    # 错误指标
-    ERRORS_TOTAL = "errors_total"
-    WARNINGS_TOTAL = "warnings_total"
-    EXCEPTIONS_TOTAL = "exceptions_total"
-
-    # 业务指标
-    ACTIONS_EXECUTED = "actions_executed_total"
-    EVENTS_BROADCAST = "events_broadcast_total"
-    USERS_ACTIVE = "users_active"
-    ENVIRONMENTS_ACTIVE = "environments_active"
+    def get_summary(self) -> Dict[str, Any]:
+        """获取指标摘要"""
+        return {
+            "active_connections": self._active_connections,
+            "envelopes_sent": self._envelope_sent_count,
+            "envelopes_received": self._envelope_received_count,
+            "envelopes_routed": self._envelope_routed_count,
+        }

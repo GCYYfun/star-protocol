@@ -22,11 +22,11 @@ from typing import Optional
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from star_protocol_v4.hub import HubServer
-from star_protocol_v4.monitor import create_simple_monitor
-from star_protocol_v4.utils import setup_logger, get_logger
-from star_protocol_v4.protocol import ClientType
-from star_protocol_v4.cli import create_hub_cli
+from star_protocol.hub import HubServer
+from star_protocol.monitor import create_simple_monitor
+from star_protocol.utils import setup_logger, get_logger
+from star_protocol.protocol import ClientType
+from star_protocol.cli import create_hub_cli
 
 
 class HubServerDemo:

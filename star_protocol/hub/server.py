@@ -1,366 +1,567 @@
-"""
-Star Protocol Hub 服务器
-
-WebSocket 服务器实现，管理所有客户端连接和消息路由
-"""
+"""Hub WebSocket 服务器"""
 
 import asyncio
-import json
-import logging
-from typing import Dict, List, Optional, Set
 import websockets
-from websockets.server import WebSocketServerProtocol
-from websockets.exceptions import ConnectionClosed, WebSocketException
-
-from ..protocol import (
-    ClientInfo,
-    ClientType,
-    Message,
-    MessageParser,
-    MessageValidationService,
-    ValidationError,
-    PermissionError,
-)
-from .session import SessionManager
+from typing import Optional
+from .manager import ConnectionManager
 from .router import MessageRouter
-from .auth import AuthenticationService
+from ..protocol import Envelope, EnvelopeType, ClientInfo, ClientType, EventMessage
+from ..utils import get_logger, get_config
 
 
-class StarHubServer:
-    """Star Protocol Hub 服务器"""
+class HubServer:
+    """Hub WebSocket 服务器"""
 
     def __init__(
         self,
         host: str = "localhost",
-        port: int = 8765,
-        enable_auth: bool = False,
-        enable_validation: bool = True,
+        port: int = 8000,
+        max_connections: Optional[int] = None,
     ):
         self.host = host
         self.port = port
-        self.enable_auth = enable_auth
-        self.enable_validation = enable_validation
+        self.max_connections = max_connections or 1000  # 默认最大连接数
 
         # 核心组件
-        self.session_manager = SessionManager()
-        self.message_router = MessageRouter(self.session_manager)
-        self.auth_service = AuthenticationService() if enable_auth else None
-        self.validator = MessageValidationService() if enable_validation else None
+        self.connection_manager = ConnectionManager()
+        self.router = MessageRouter(self.connection_manager)
 
         # 服务器状态
-        self.is_running = False
-        self.websocket_server: Optional[websockets.WebSocketServer] = None
+        self.server: Optional[websockets.WebSocketServer] = None
+        self.running = False
 
-        # 日志
-        self.logger = logging.getLogger("star_hub_server")
+        # 监控（可选）
+        self._metrics_enabled = False
+        self._metrics_collector = None
 
-        # 统计信息
-        self.stats = {
-            "total_connections": 0,
-            "active_connections": 0,
-            "messages_processed": 0,
-            "errors": 0,
-        }
+        self.logger = get_logger("star_protocol.hub.server")
 
     async def start(self) -> None:
         """启动服务器"""
-        if self.is_running:
-            self.logger.warning("Server is already running")
+        if self.running:
+            self.logger.warning("服务器已经在运行")
             return
 
         try:
-            self.logger.info(f"Starting Star Hub Server on {self.host}:{self.port}")
+            self.logger.info(f"启动 Hub 服务器: {self.host}:{self.port}")
 
             # 启动 WebSocket 服务器
-            self.websocket_server = await websockets.serve(
-                self._handle_client_connection,
+            self.server = await websockets.serve(
+                self._handle_client,
                 self.host,
                 self.port,
-                ping_interval=30,
-                ping_timeout=10,
+                max_size=None,  # 不限制消息大小
+                ping_interval=30,  # 30秒ping间隔
+                ping_timeout=10,  # 10秒ping超时
+                close_timeout=10,  # 10秒关闭超时
             )
 
-            self.is_running = True
-            self.logger.info("Server started successfully")
+            self.running = True
+            self.logger.info("Hub 服务器启动成功")
+
+            # 启动心跳检查任务
+            asyncio.create_task(self._heartbeat_checker())
 
         except Exception as e:
-            self.logger.error(f"Failed to start server: {e}")
+            self.logger.error(f"启动服务器失败: {e}")
             raise
 
     async def stop(self) -> None:
         """停止服务器"""
-        if not self.is_running:
+        if not self.running:
             return
 
-        self.logger.info("Stopping server...")
-        self.is_running = False
+        self.logger.info("停止 Hub 服务器")
+        self.running = False
 
-        # 关闭所有客户端连接
-        await self.session_manager.disconnect_all_clients()
+        try:
+            # 首先断开所有客户端连接
+            connections = self.connection_manager.get_all_connections()
+            disconnect_tasks = []
 
-        # 关闭 WebSocket 服务器
-        if self.websocket_server:
-            self.websocket_server.close()
-            await self.websocket_server.wait_closed()
+            for client_id, connection in connections.items():
+                try:
+                    # 发送关闭消息给客户端
+                    if not connection.websocket.closed:
+                        disconnect_tasks.append(
+                            connection.websocket.close(
+                                code=1001, reason="Server shutdown"
+                            )
+                        )
+                except Exception as e:
+                    self.logger.debug(f"关闭客户端连接 {client_id} 失败: {e}")
+                finally:
+                    # 移除连接管理器中的连接
+                    self.connection_manager.remove_connection(client_id)
 
-        self.logger.info("Server stopped")
+            # 等待所有连接关闭
+            if disconnect_tasks:
+                await asyncio.gather(*disconnect_tasks, return_exceptions=True)
 
-    async def _handle_client_connection(
-        self, websocket: WebSocketServerProtocol
+            # 停止 WebSocket 服务器
+            if self.server:
+                self.server.close()
+                await self.server.wait_closed()
+                self.server = None
+
+            self.logger.info("Hub 服务器已停止")
+
+        except Exception as e:
+            self.logger.error(f"停止服务器时出错: {e}")
+        finally:
+            # 确保服务器状态被正确设置
+            self.running = False
+
+    async def _handle_client(
+        self, websocket: websockets.WebSocketServerProtocol
     ) -> None:
-        """处理客户端连接"""
+        """处理客户端连接
+
+        Args:
+            websocket: WebSocket 连接
+        """
         client_id = None
 
         try:
-            # 从 WebSocket 对象获取路径信息
-            # 在新版本的 websockets 中，路径信息在 request.path 中
-            path = websocket.request.path
+            # 处理客户端注册
+            client_id, client_info = await self._handle_client_registration(websocket)
+            if not client_id or not client_info:
+                return  # 注册失败，连接已关闭
 
-            # 解析连接路径获取客户端信息
-            client_info = self._parse_connection_path(path)
-            if not client_info:
-                await websocket.close(code=4000, reason="Invalid connection path")
-                return
+            # 进入消息循环
+            async for raw_message in websocket:
+                try:
+                    envelope = Envelope.from_json(raw_message)
 
-            client_id = client_info.id
-            self.logger.info(f"New connection: {client_info.type.value} {client_id}")
+                    # 处理心跳消息
+                    if envelope.envelope_type == EnvelopeType.HEARTBEAT:
+                        self.connection_manager.update_heartbeat(client_id)
+                        continue
 
-            # 更新统计信息
-            self.stats["total_connections"] += 1
-            self.stats["active_connections"] += 1
+                    # 路由消息
+                    connection = self.connection_manager.get_connection(client_id)
+                    if connection:
+                        await self.router.route_envelope(envelope, connection)
 
-            # 注册会话
-            self.session_manager.register_session(client_info, websocket)
+                    # 记录指标（如果启用）
+                    if self._metrics_enabled and self._metrics_collector:
+                        await self._metrics_collector.record_envelope_routed(envelope)
 
-            # 发送连接确认
-            await self._send_connection_ack(websocket, client_info)
+                except Exception as e:
+                    self.logger.error(f"处理客户端 {client_id} 消息失败: {e}")
 
-            # 处理消息循环
-            await self._message_loop(websocket, client_info)
-
-        except ConnectionClosed:
-            self.logger.info(f"Client {client_id} disconnected")
-        except WebSocketException as e:
-            self.logger.error(f"WebSocket error for client {client_id}: {e}")
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.debug(f"客户端 {client_id} 连接已关闭")
+        except asyncio.TimeoutError:
+            self.logger.warning(f"客户端 {client_id} 连接超时")
         except Exception as e:
-            self.logger.error(f"Error handling client {client_id}: {e}")
-            self.stats["errors"] += 1
+            self.logger.error(f"处理客户端 {client_id} 连接失败: {e}")
 
         finally:
-            # 清理会话
+            # 清理连接
             if client_id:
-                self.session_manager.unregister_session(client_id)
-                self.stats["active_connections"] -= 1
-                self.logger.info(f"Client {client_id} session cleaned up")
+                self.connection_manager.remove_connection(client_id)
 
-    def _parse_connection_path(self, path: str) -> Optional[ClientInfo]:
-        """解析连接路径获取客户端信息"""
-        # 路径格式:
-        # /env/{env_id}/agent/{agent_id}  - Agent 连接
-        # /env/{env_id}                   - Environment 连接
-        # /human/{human_id}               - Human 连接
-        # /ws/metaverse                   - 通用连接
+                # 记录指标（如果启用）
+                if self._metrics_enabled and self._metrics_collector:
+                    await self._metrics_collector.record_client_disconnected(client_id)
 
-        parts = [p for p in path.split("/") if p]
+    async def _handle_client_registration(
+        self, websocket: websockets.WebSocketServerProtocol
+    ) -> tuple[Optional[str], Optional[ClientInfo]]:
+        """处理客户端注册流程
 
-        if len(parts) >= 4 and parts[0] == "env" and parts[2] == "agent":
-            # Agent 连接
-            return ClientInfo(id=parts[3], type=ClientType.AGENT)
+        Args:
+            websocket: WebSocket 连接
 
-        elif len(parts) >= 2 and parts[0] == "env":
-            # Environment 连接
-            return ClientInfo(id=parts[1], type=ClientType.ENVIRONMENT)
+        Returns:
+            tuple[client_id, client_info]: 成功时返回客户端ID和信息，失败时返回 (None, None)
+        """
+        try:
+            # 等待第一条消息来识别客户端 - 应该是 connect event message
+            raw_message = await asyncio.wait_for(
+                websocket.recv(), timeout=30.0  # 30秒超时
+            )
 
-        elif len(parts) >= 2 and parts[0] == "human":
-            # Human 连接
-            return ClientInfo(id=parts[1], type=ClientType.HUMAN)
+            # 解析并验证 connect event
+            client_id, client_info = await self._parse_and_validate_connect_message(
+                raw_message, websocket
+            )
+            if not client_id or not client_info:
+                return None, None
 
-        elif len(parts) >= 2 and parts[0] == "ws" and parts[1] == "metaverse":
-            # 通用连接 - 需要后续识别
-            return ClientInfo(id="unknown", type=ClientType.HUB)
+            # 执行注册流程
+            success = await self._register_client(websocket, client_id, client_info)
+            if not success:
+                return None, None
+
+            return client_id, client_info
+
+        except asyncio.TimeoutError:
+            self.logger.warning("等待客户端连接消息超时")
+            await websocket.close(code=1002, reason="Connection timeout")
+            return None, None
+        except Exception as e:
+            self.logger.error(f"客户端注册失败: {e}")
+            await websocket.close(code=1011, reason="Registration failed")
+            return None, None
+
+    async def _parse_and_validate_connect_message(
+        self, raw_message: str, websocket: websockets.WebSocketServerProtocol
+    ) -> tuple[Optional[str], Optional[ClientInfo]]:
+        """解析和验证连接消息
+
+        Args:
+            raw_message: 原始消息
+            websocket: WebSocket 连接
+
+        Returns:
+            tuple[client_id, client_info]: 成功时返回客户端ID和信息，失败时返回 (None, None)
+        """
+        try:
+            # 解析信封获取客户端ID和连接信息
+            envelope = Envelope.from_json(raw_message)
+            client_id = envelope.sender
+
+            # 验证第一条消息应该是 connect event
+            if envelope.envelope_type != EnvelopeType.MESSAGE:
+                await websocket.close(
+                    code=1002, reason="First message must be EVENT message"
+                )
+                self.logger.warning(f"客户端 {client_id} 第一条消息类型错误")
+                return None, None
+
+            if (
+                not isinstance(envelope.message, EventMessage)
+                or envelope.message.event != "connect"
+            ):
+                await websocket.close(
+                    code=1002, reason="First message must be connect event"
+                )
+                self.logger.warning(f"客户端 {client_id} 第一条消息不是 connect event")
+                return None, None
+
+            # 从 connect event 中提取客户端信息
+            connect_data = envelope.message.data or {}
+            client_info = self._create_client_info_from_connect(client_id, connect_data)
+
+            return client_id, client_info
+
+        except Exception as e:
+            self.logger.error(f"解析连接消息失败: {e}")
+            await websocket.close(code=1002, reason="Invalid connect message")
+            return None, None
+
+    async def _register_client(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        client_id: str,
+        client_info: ClientInfo,
+    ) -> bool:
+        """注册客户端
+
+        Args:
+            websocket: WebSocket 连接
+            client_id: 客户端ID
+            client_info: 客户端信息
+
+        Returns:
+            bool: 注册是否成功
+        """
+        try:
+            # 检查连接数限制
+            if (
+                len(self.connection_manager.get_all_connections())
+                >= self.max_connections
+            ):
+                await websocket.close(code=1013, reason="Server overloaded")
+                self.logger.warning(f"拒绝连接 {client_id}: 超过最大连接数")
+                return False
+
+            # 添加连接
+            if not self.connection_manager.add_connection(websocket, client_info):
+                await websocket.close(code=1002, reason="Duplicate client ID")
+                self.logger.warning(f"拒绝连接 {client_id}: 客户端ID重复")
+                return False
+
+            self.logger.info(
+                f"客户端连接成功: {client_id} ({client_info.client_type.value})"
+            )
+
+            # 设置初始心跳时间
+            self.connection_manager.update_heartbeat(client_id)
+
+            # 发送注册成功的 event message 给客户端
+            await self._send_registration_success(client_id, client_info)
+
+            # 如果是Agent连接，通知对应的Environment
+            if client_info.client_type == ClientType.AGENT and client_info.env_id:
+                await self._notify_environment_agent_joined(client_info)
+
+            # 记录指标（如果启用）
+            if self._metrics_enabled and self._metrics_collector:
+                await self._metrics_collector.record_client_connected(client_info)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"注册客户端 {client_id} 失败: {e}")
+            return False
+
+    async def _heartbeat_checker(self) -> None:
+        """心跳检查任务"""
+        heartbeat_interval = 60.0  # 60秒心跳间隔
+
+        while self.running:
+            try:
+                await asyncio.sleep(heartbeat_interval)
+
+                if not self.running:
+                    break
+
+                current_time = asyncio.get_event_loop().time()
+                timeout_threshold = current_time - heartbeat_interval * 2
+
+                # 检查超时的连接
+                connections = self.connection_manager.get_all_connections()
+                timeout_clients = []
+
+                for client_id, connection in connections.items():
+                    if connection.last_heartbeat < timeout_threshold:
+                        timeout_clients.append(client_id)
+
+                # 断开超时的连接
+                for client_id in timeout_clients:
+                    self.logger.warning(f"客户端 {client_id} 心跳超时，断开连接")
+                    connection = self.connection_manager.get_connection(client_id)
+                    if connection:
+                        try:
+                            await connection.websocket.close(
+                                code=1001, reason="Heartbeat timeout"
+                            )
+                        except Exception:
+                            pass
+                        self.connection_manager.remove_connection(client_id)
+
+            except Exception as e:
+                self.logger.error(f"心跳检查出错: {e}")
+
+    def _create_client_info_from_connect(
+        self, client_id: str, connect_data: dict
+    ) -> ClientInfo:
+        """从 connect event 数据创建客户端信息
+
+        Args:
+            client_id: 客户端ID
+            connect_data: connect event 携带的数据
+
+        Returns:
+            客户端信息
+        """
+        # 从 connect_data 中提取客户端类型
+        client_type_str = connect_data.get("client_type", "").lower()
+
+        if client_type_str == "environment":
+            client_type = ClientType.ENVIRONMENT
+            # 对于环境客户端，env_id 就是环境名称
+            env_id = connect_data.get("env_id") or client_id.replace("env_", "")
+        elif client_type_str == "human":
+            client_type = ClientType.HUMAN
+            env_id = connect_data.get("env_id")
+        else:
+            # 默认为 Agent
+            client_type = ClientType.AGENT
+            env_id = connect_data.get("env_id")
+
+            # 如果没有指定 env_id，尝试自动推断
+            if not env_id:
+                env_id = self._infer_env_id_for_agent(client_id)
+
+        # 提取其他元数据
+        metadata = connect_data.get("metadata", {})
+
+        return ClientInfo(
+            client_id=client_id,
+            client_type=client_type,
+            env_id=env_id,
+            metadata=metadata,
+        )
+
+    def _infer_env_id_for_agent(self, client_id: str) -> Optional[str]:
+        """为 Agent 推断 env_id
+
+        Args:
+            client_id: Agent 客户端ID
+
+        Returns:
+            推断出的 env_id
+        """
+        # 尝试从当前连接的环境中推断
+        connections = self.connection_manager.get_all_connections()
+        env_connections = [
+            conn.client_info.env_id
+            for conn in connections.values()
+            if conn.client_info.client_type == ClientType.ENVIRONMENT
+        ]
+
+        # 如果只有一个环境连接，默认分配给它
+        if len(env_connections) == 1:
+            return env_connections[0]
+
+        # 如果有多个环境，尝试从客户端ID中匹配
+        if len(env_connections) > 1:
+            for env_id_candidate in env_connections:
+                if env_id_candidate in client_id.lower():
+                    return env_id_candidate
+            # 如果没有匹配，使用第一个环境作为默认
+            return env_connections[0]
+
+        # 特殊情况：demo 相关的 agent 默认分配给 demo_world
+        if "demo" in client_id.lower():
+            return "demo_world"
 
         return None
 
-    async def _send_connection_ack(
-        self, websocket: WebSocketServerProtocol, client_info: ClientInfo
+    async def _send_registration_success(
+        self, client_id: str, client_info: ClientInfo
     ) -> None:
-        """发送连接确认 - 使用heartbeat响应"""
-        hub_info = ClientInfo(id="server", type=ClientType.HUB)
+        """发送注册成功的 event message 给客户端
 
-        # 发送heartbeat响应而不是connect消息
-        ack_message = Message(
-            type="heartbeat",
-            sender=hub_info,
-            recipient=client_info,
-            payload={
-                "pong": True,
-                "status": "connected",
-                "server_time": self._get_current_timestamp(),
-                "client_id": client_info.id,
-                "client_type": client_info.type.value,
-            },
-        )
+        Args:
+            client_id: 客户端ID
+            client_info: 客户端信息
+        """
+        connection = self.connection_manager.get_connection(client_id)
+        if not connection:
+            return
 
-        await websocket.send(MessageParser.to_json(ack_message))
-
-    async def _message_loop(
-        self, websocket: WebSocketServerProtocol, client_info: ClientInfo
-    ) -> None:
-        """消息处理循环"""
-        while True:
-            try:
-                # 接收消息
-                message_json = await websocket.recv()
-                await self._process_message(message_json, client_info)
-
-            except ConnectionClosed:
-                break
-            except Exception as e:
-                self.logger.error(f"Error in message loop for {client_info.id}: {e}")
-                await asyncio.sleep(0.1)
-
-    async def _process_message(
-        self, message_json: str, sender_info: ClientInfo
-    ) -> None:
-        """处理接收到的消息"""
         try:
-            # 更新统计
-            self.stats["messages_processed"] += 1
+            # 创建注册成功事件消息
 
-            # 解析消息
-            message = MessageParser.parse_json(message_json)
-
-            # 更新发送者信息（防止伪造）
-            message.sender = sender_info
-
-            self.logger.debug(
-                f"Processing message from {sender_info.id}: {message.type}"
+            event = EventMessage(
+                event="connected",
+                data={
+                    "client_id": client_id,
+                    "client_type": client_info.client_type.value,
+                    "env_id": client_info.env_id,
+                    "status": "success",
+                    "message": "客户端注册成功",
+                },
             )
 
-            # 验证消息
-            if self.validator:
-                try:
-                    self.validator.validate_message(message.to_dict())
-                except (ValidationError, PermissionError) as e:
-                    self.logger.warning(f"Message validation failed: {e}")
-                    await self._send_error_response(
-                        sender_info, "validation_error", str(e)
-                    )
-                    return
+            # 发送注册成功消息给客户端
+            envelope = Envelope(
+                envelope_type=EnvelopeType.MESSAGE,
+                sender="hub",
+                recipient=client_id,
+                message=event,
+            )
 
-            # 认证检查
-            if self.auth_service and not await self._check_authentication(message):
-                await self._send_error_response(
-                    sender_info, "authentication_error", "Authentication required"
-                )
-                return
-
-            # 路由消息
-            await self.message_router.route_message(message)
+            await connection.websocket.send(envelope.to_json())
+            self.logger.info(f"已发送注册成功消息给客户端: {client_id}")
 
         except Exception as e:
-            self.logger.error(f"Error processing message: {e}")
-            self.stats["errors"] += 1
-            await self._send_error_response(
-                sender_info, "processing_error", "Message processing failed"
+            self.logger.error(f"发送注册成功消息失败: {e}")
+
+    async def _notify_environment_agent_joined(self, agent_info: ClientInfo) -> None:
+        """通知Environment有新Agent加入
+
+        Args:
+            agent_info: Agent的客户端信息
+        """
+        if not agent_info.env_id:
+            self.logger.debug(
+                f"Agent {agent_info.client_id} 没有指定 env_id，跳过环境通知"
+            )
+            return
+
+        # 查找对应的Environment - 环境客户端ID格式为 env_{env_id}
+        env_client_id = f"{agent_info.env_id}"
+        env_connection = self.connection_manager.get_connection(env_client_id)
+
+        if env_connection:
+            try:
+                from ..protocol import EventMessage
+
+                event = EventMessage(
+                    event="agent_joined",
+                    data={
+                        "agent_id": agent_info.client_id,
+                        "agent_metadata": agent_info.metadata,
+                    },
+                )
+
+                # 发送通知给Environment
+                envelope = Envelope(
+                    envelope_type=EnvelopeType.MESSAGE,
+                    sender="hub",
+                    recipient=env_client_id,
+                    message=event,
+                )
+
+                await env_connection.websocket.send(envelope.to_json())
+                self.logger.info(
+                    f"通知Environment {env_client_id} Agent {agent_info.client_id} 已加入"
+                )
+
+            except Exception as e:
+                self.logger.error(f"通知Environment失败: {e}")
+        else:
+            self.logger.warning(
+                f"未找到环境 {env_client_id} (对应Agent {agent_info.client_id} 的 env_id: {agent_info.env_id})，无法发送Agent加入通知"
             )
 
-    async def _check_authentication(self, message: Message) -> bool:
-        """检查消息认证"""
-        if not self.auth_service:
-            return True
+    def enable_metrics(self, collector=None) -> None:
+        """启用监控
 
-        # 心跳消息可能包含认证信息
-        if message.type == "heartbeat":
-            return await self.auth_service.authenticate_message(message)
+        Args:
+            collector: 指标收集器，如果为 None 则使用默认收集器
+        """
+        self._metrics_enabled = True
+        if collector is None:
+            from ..monitor import MetricsCollector
 
-        # 检查会话是否已认证
-        return self.session_manager.is_authenticated(message.sender.id)
+            self._metrics_collector = MetricsCollector()
+        else:
+            self._metrics_collector = collector
 
-    async def _send_error_response(
-        self, client_info: ClientInfo, error_type: str, error_message: str
-    ) -> None:
-        """发送错误响应"""
-        hub_info = ClientInfo(id="server", type=ClientType.HUB)
+    def disable_metrics(self) -> None:
+        """禁用监控"""
+        self._metrics_enabled = False
+        self._metrics_collector = None
 
-        error_response = Message(
-            type="error",
-            sender=hub_info,
-            recipient=client_info,
-            payload={
-                "error_code": "HUB001",
-                "error_type": error_type,
-                "message": error_message,
-                "details": {},
+    def get_stats(self) -> dict:
+        """获取服务器统计信息
+
+        Returns:
+            统计信息字典
+        """
+        connection_stats = self.connection_manager.get_stats()
+        return {
+            "server": {
+                "running": self.running,
+                "host": self.host,
+                "port": self.port,
+                "max_connections": self.max_connections,
             },
-        )
-
-        await self.session_manager.send_to_client(
-            client_info.id, MessageParser.to_json(error_response)
-        )
-
-    def _get_current_timestamp(self) -> str:
-        """获取当前时间戳"""
-        from datetime import datetime
-
-        return datetime.now().isoformat()
-
-    # 服务器管理 API
-    def get_stats(self) -> Dict[str, int]:
-        """获取服务器统计信息"""
-        return {
-            **self.stats,
-            "uptime_seconds": self._get_uptime_seconds(),
-            "active_environments": len(self.session_manager.get_environments()),
-            "active_agents": len(self.session_manager.get_agents()),
-            "active_humans": len(self.session_manager.get_humans()),
+            "connections": connection_stats,
         }
 
-    def get_client_list(self) -> Dict[str, List[str]]:
-        """获取客户端列表"""
-        return {
-            "agents": self.session_manager.get_agents(),
-            "environments": self.session_manager.get_environments(),
-            "humans": self.session_manager.get_humans(),
-        }
 
-    def _get_uptime_seconds(self) -> int:
-        """获取运行时间（秒）"""
-        # 简单实现，实际应该记录启动时间
-        return 0
+# 便捷的启动函数
+async def start_hub_server(
+    host: str = "localhost", port: int = 8000, max_connections: Optional[int] = None
+) -> HubServer:
+    """启动 Hub 服务器
 
-    # 上下文管理器支持
-    async def __aenter__(self):
-        await self.start()
-        return self
+    Args:
+        host: 监听地址
+        port: 监听端口
+        max_connections: 最大连接数
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.stop()
-
-
-# 服务器启动辅助函数
-async def run_server(
-    host: str = "localhost",
-    port: int = 8765,
-    enable_auth: bool = False,
-    enable_validation: bool = True,
-) -> None:
-    """运行服务器"""
-    server = StarHubServer(host, port, enable_auth, enable_validation)
-
-    try:
-        await server.start()
-
-        # 保持运行
-        while server.is_running:
-            await asyncio.sleep(1)
-
-    except KeyboardInterrupt:
-        logging.info("Received interrupt signal")
-    finally:
-        await server.stop()
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_server())
+    Returns:
+        Hub 服务器实例
+    """
+    server = HubServer(host, port, max_connections)
+    await server.start()
+    return server

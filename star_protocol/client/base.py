@@ -1,318 +1,708 @@
-"""
-Star Protocol 客户端基类
-
-提供 WebSocket 客户端的基础功能
-"""
+"""Star Protocol 客户端基类"""
 
 import asyncio
-import json
-import logging
-from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Union
+import inspect
+import time
 import websockets
-from websockets.exceptions import ConnectionClosed, WebSocketException
-from ..protocol.types import ClientType
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Set
 from ..protocol import (
-    ClientInfo,
+    Envelope,
     Message,
-    MessageBuilder,
-    MessageParser,
-    MessageValidationService,
-    ValidationError,
+    EnvelopeType,
+    MessageType,
+    ClientType,
+    ClientInfo,
 )
-from ..monitor import get_monitor, BaseMonitor, set_rich_mode
+from ..protocol import ActionMessage, OutcomeMessage, EventMessage, StreamMessage
+from ..utils import get_logger
 
 
-# 事件处理器类型
-EventHandler = Callable[[Message], None]
-AsyncEventHandler = Callable[[Message], Any]  # 支持异步
+@dataclass
+class MessageContext:
+    """消息上下文，包含消息和相关元数据"""
+
+    message: Message
+    sender: Optional[str] = None
+    recipient: Optional[str] = None
+    envelope_type: Optional[EnvelopeType] = None
+    timestamp: Optional[float] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-class BaseStarClient(ABC):
-    """Star Protocol 客户端基类"""
+class BaseClient:
+    """Star Protocol 客户端基类
+
+    提供7个固定事件处理方法和4个装饰器用于用户自定义处理。
+
+    固定事件：
+    - on_heartbeat: 心跳事件
+    - on_message: 消息事件（会进一步分发到具体消息类型）
+    - on_error: 错误事件
+    - on_action: ACTION 消息事件
+    - on_outcome: OUTCOME 消息事件
+    - on_event: EVENT 消息事件
+    - on_stream: STREAM 消息事件
+
+    用户装饰器：
+    - @action(): 注册 ACTION 消息处理器
+    - @outcome(): 注册 OUTCOME 消息处理器
+    - @event(): 注册 EVENT 消息处理器
+    - @stream(): 注册 STREAM 消息处理器
+    """
 
     def __init__(
         self,
-        client_info: ClientInfo,
-        validate_messages: bool = True,
-        base_url: str = "ws://localhost",
-        port: int = 8000,
+        client_id: str,
+        client_type: ClientType,
+        hub_url: str,
+        env_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
-        self.server_url = f"{base_url}:{port}"
-        self.client_info = client_info
-        self.session: Optional[websockets.WebSocketClientProtocol] = None
-        self.is_connected = False
+        self.client_info = ClientInfo(
+            client_id=client_id,
+            client_type=client_type,
+            env_id=env_id,
+            metadata=metadata or {},
+        )
+        self.hub_url = hub_url
+        self.websocket: Optional[websockets.WebSocketServerProtocol] = None
+        self.connected = False
 
-        # 消息验证
-        self.validator = (
-            MessageValidationService(enable_permission_check=False)
-            if validate_messages
-            else None
+        # 便捷属性
+        self.client_id = client_id
+        self.client_type = client_type
+        self.env_id = env_id
+        self.metadata = metadata or {}
+
+        # 上下文管理器
+        from .context import ClientContext
+
+        self.context = ClientContext(client_id=client_id)
+
+        # 用户自定义处理器（通过装饰器注册）
+        self._action_handlers: List[Callable] = []
+        self._outcome_handlers: List[Callable] = []
+        self._event_handlers: List[Callable] = []
+        self._stream_handlers: List[Callable] = []
+
+        # 日志器
+        self.logger = get_logger("star_protocol.client")
+
+        # 监控（可选）
+        self._metrics_enabled = False
+        self._metrics_collector = None
+
+    # ===========================================
+    # 4个装饰器 - 用户自定义处理器注册
+    # ===========================================
+
+    def action(self, action_name: Optional[str] = None):
+        """ACTION 消息处理器装饰器
+
+        Args:
+            action_name: 可选的动作名称过滤，如果指定则只处理该动作
+
+        Usage:
+            @client.action()
+            async def handle_action(message: ActionMessage):
+                print(f"收到动作: {message.action}")
+
+            @client.action("move")
+            async def handle_move(message: ActionMessage):
+                print(f"收到移动动作: {message.parameters}")
+        """
+
+        def decorator(func: Callable):
+            # 检查函数签名以决定传递什么参数
+            sig = inspect.signature(func)
+            params = list(sig.parameters.keys())
+
+            # 包装函数以支持过滤和上下文传递
+            async def wrapper(ctx: MessageContext):
+                message = ctx.message
+                if action_name is None or message.action == action_name:
+                    if asyncio.iscoroutinefunction(func):
+                        # 根据参数签名决定传递什么
+                        if len(params) == 1:
+                            # 只接受 message 参数（向后兼容）
+                            await func(message)
+                        elif len(params) == 2 and "ctx" in params:
+                            # 接受 message 和 ctx 参数
+                            await func(message, ctx)
+                        else:
+                            # 默认只传递 message
+                            await func(message)
+                    else:
+                        if len(params) == 1:
+                            func(message)
+                        elif len(params) == 2 and "ctx" in params:
+                            func(message, ctx)
+                        else:
+                            func(message)
+
+            self._action_handlers.append(wrapper)
+            return func
+
+        return decorator
+
+    def outcome(self, action_id: Optional[str] = None):
+        """OUTCOME 消息处理器装饰器
+
+        Args:
+            action_id: 可选的动作ID过滤，如果指定则只处理该动作的结果
+
+        Usage:
+            @client.outcome()
+            async def handle_outcome(message: OutcomeMessage):
+                print(f"收到结果: {message.status}")
+        """
+
+        def decorator(func: Callable):
+            async def wrapper(message: OutcomeMessage):
+                if action_id is None or message.action_id == action_id:
+                    if asyncio.iscoroutinefunction(func):
+                        await func(message)
+                    else:
+                        func(message)
+
+            self._outcome_handlers.append(wrapper)
+            return func
+
+        return decorator
+
+    def event(self, event_name: Optional[str] = None):
+        """EVENT 消息处理器装饰器
+
+        Args:
+            event_name: 可选的事件名称过滤，如果指定则只处理该事件
+
+        Usage:
+            @client.event()
+            async def handle_event(message: EventMessage):
+                print(f"收到事件: {message.event}")
+
+            @client.event("agent_moved")
+            async def handle_move_event(message: EventMessage):
+                print(f"Agent移动事件: {message.data}")
+        """
+
+        def decorator(func: Callable):
+            async def wrapper(message: EventMessage):
+                if event_name is None or message.event == event_name:
+                    if asyncio.iscoroutinefunction(func):
+                        await func(message)
+                    else:
+                        func(message)
+
+            self._event_handlers.append(wrapper)
+            return func
+
+        return decorator
+
+    def stream(self, stream_name: Optional[str] = None):
+        """STREAM 消息处理器装饰器
+
+        Args:
+            stream_name: 可选的流名称过滤，如果指定则只处理该流
+
+        Usage:
+            @client.stream()
+            async def handle_stream(message: StreamMessage):
+                print(f"收到流数据: {message.stream}")
+
+            @client.stream("video_feed")
+            async def handle_video(message: StreamMessage):
+                print(f"视频流: {message.chunk}")
+        """
+
+        def decorator(func: Callable):
+            async def wrapper(message: StreamMessage):
+                if stream_name is None or message.stream == stream_name:
+                    if asyncio.iscoroutinefunction(func):
+                        await func(message)
+                    else:
+                        func(message)
+
+            self._stream_handlers.append(wrapper)
+            return func
+
+        return decorator
+
+    # ===========================================
+    # 7个固定事件处理方法
+    # ===========================================
+
+    async def on_heartbeat(self, envelope: Envelope) -> None:
+        """处理心跳事件（默认实现）
+
+        Args:
+            envelope: 心跳信封
+        """
+        self.logger.debug(f"收到心跳: {envelope.sender}")
+        # 默认实现：记录日志
+        # 子类可以重写此方法
+
+    async def on_error(self, envelope: Envelope) -> None:
+        """处理错误事件（默认实现）
+
+        Args:
+            envelope: 错误信封
+        """
+        self.logger.warning(f"收到错误: {envelope.sender}")
+        # 默认实现：记录日志
+        # 子类可以重写此方法
+
+    async def on_message(self, envelope: Envelope) -> None:
+        """处理消息事件（默认实现）
+
+        此方法会进一步分发到具体的消息类型处理方法。
+
+        Args:
+            envelope: 消息信封
+        """
+        message = envelope.message
+
+        # 根据消息类型分发到具体处理方法
+        if isinstance(message, ActionMessage):
+            await self.on_action(message, envelope)
+        elif isinstance(message, OutcomeMessage):
+            # 处理 outcome 响应，尝试匹配上下文
+            await self._handle_outcome_response(message)
+            await self.on_outcome(message)
+        elif isinstance(message, EventMessage):
+            # 处理 event 响应，尝试匹配上下文
+            await self._handle_event_response(message)
+            await self.on_event(message)
+        elif isinstance(message, StreamMessage):
+            await self.on_stream(message)
+        else:
+            self.logger.warning(f"未知消息类型: {type(message)}")
+
+    async def on_action(self, message: ActionMessage, envelope: Envelope) -> None:
+        """处理 ACTION 消息事件（默认实现）
+
+        Args:
+            message: ACTION 消息
+            envelope: 消息信封（包含发送者等信息）
+        """
+        self.logger.debug(f"收到动作: {message.action} from {envelope.sender}")
+
+        # 创建消息上下文
+        ctx = MessageContext(
+            message=message,
+            sender=envelope.sender,
+            recipient=envelope.recipient,
+            envelope_type=envelope.envelope_type,
+            timestamp=time.time(),
         )
 
-        # 监控器
-        self.monitor = get_monitor(f"{client_info.type.value}_{client_info.id}")
+        # 调用用户注册的处理器
+        for handler in self._action_handlers:
+            try:
+                await handler(ctx)
+            except Exception as e:
+                self.logger.error(f"ACTION 处理器出错: {e}")
 
-        # 内部状态
-        self._running = False
-        self._receive_task: Optional[asyncio.Task] = None
+    async def on_outcome(self, message: OutcomeMessage) -> None:
+        """处理 OUTCOME 消息事件（默认实现）
 
-        # 初始化消息处理器
-        self._setup_message_handlers()
+        Args:
+            message: OUTCOME 消息
+        """
+        self.logger.debug(f"收到结果: {message.action_id} - {message.status}")
 
-    @abstractmethod
-    def get_connection_url(self) -> str:
-        """获取连接 URL - 子类必须实现"""
-        pass
+        # 调用用户注册的处理器
+        for handler in self._outcome_handlers:
+            try:
+                await handler(message)
+            except Exception as e:
+                self.logger.error(f"OUTCOME 处理器出错: {e}")
 
-    async def connect(self) -> bool:
-        """连接到服务器"""
-        if self.is_connected:
-            self.monitor.warning("Already connected")
-            return True
+    async def on_event(self, message: EventMessage) -> None:
+        """处理 EVENT 消息事件（默认实现）
 
+        Args:
+            message: EVENT 消息
+        """
+        self.logger.debug(f"收到事件: {message.event}")
+
+        # 调用用户注册的处理器
+        for handler in self._event_handlers:
+            try:
+                await handler(message)
+            except Exception as e:
+                self.logger.error(f"EVENT 处理器出错: {e}")
+
+    async def on_stream(self, message: StreamMessage) -> None:
+        """处理 STREAM 消息事件（默认实现）
+
+        Args:
+            message: STREAM 消息
+        """
+        self.logger.debug(f"收到流数据: {message.stream} #{message.sequence}")
+
+        # 调用用户注册的处理器
+        for handler in self._stream_handlers:
+            try:
+                await handler(message)
+            except Exception as e:
+                self.logger.error(f"STREAM 处理器出错: {e}")
+
+    # ===========================================
+    # 连接和消息发送
+    # ===========================================
+
+    async def connect(self) -> None:
+        """连接到 Hub"""
         try:
-            url = self.get_connection_url()
-            self.monitor.info(f"Connecting to {url}")
-            self.monitor.set_status("连接中")
+            self.logger.info(f"连接到 Hub: {self.hub_url}")
+            self.websocket = await websockets.connect(self.hub_url)
+            self.connected = True
 
-            self.session = await websockets.connect(url)
-            self.is_connected = True
-            self._running = True
+            # 启动上下文管理器
+            await self.context.start()
 
-            # 启动消息接收任务
-            self._receive_task = asyncio.create_task(self._receive_messages())
+            # 发送 connect event 作为第一条消息
+            await self._send_connect_event()
 
-            self.monitor.success("Connected successfully")
-            self.monitor.set_status("已连接")
-            self.monitor.update_stats(连接状态="已连接", 服务器地址=url)
+            # 启动消息监听
+            asyncio.create_task(self.receive_loop())
 
-            await self._on_connected()
-
-            return True
+            self.logger.info("连接成功")
 
         except Exception as e:
-            self.monitor.error(f"Connection failed: {e}")
-            self.monitor.set_status("连接失败")
-            self.is_connected = False
-            return False
+            self.logger.error(f"连接失败: {e}")
+            self.connected = False
+            raise
+
+    async def _send_connect_event(self) -> None:
+        """发送连接事件作为第一条消息"""
+        from ..protocol import EventMessage, Envelope, EnvelopeType
+
+        # 获取客户端身份信息
+        client_info = self._get_client_identity()
+
+        # 创建 connect event
+        connect_event = EventMessage(event="connect", data=client_info)
+
+        # 创建信封
+        envelope = Envelope(
+            envelope_type=EnvelopeType.MESSAGE,
+            sender=self.client_id,
+            recipient="hub",
+            message=connect_event,
+        )
+
+        # 发送连接事件
+        json_str = envelope.to_json()
+        await self.websocket.send(json_str)
+        self.logger.debug(f"已发送 connect event: {client_info}")
+
+    def _get_client_identity(self) -> dict:
+        """获取客户端身份信息 - 子类需要重写此方法
+
+        Returns:
+            包含客户端身份信息的字典
+        """
+        return {"client_type": "unknown", "env_id": None, "metadata": {}}
 
     async def disconnect(self) -> None:
         """断开连接"""
-        if not self.is_connected:
+        if self.connected and self.websocket:
+            try:
+                # 停止上下文管理器
+                await self.context.stop()
+
+                # 关闭 WebSocket
+                await self.websocket.close()
+
+            except Exception as e:
+                self.logger.error(f"断开连接时出错: {e}")
+            finally:
+                self.connected = False
+                self.websocket = None
+                self.logger.info("连接已断开")
+
+    async def send_envelope(self, envelope: Envelope) -> None:
+        """发送信封消息
+
+        Args:
+            envelope: 要发送的信封
+        """
+        if not self.connected or not self.websocket:
+            raise RuntimeError("客户端未连接")
+
+        try:
+            json_str = envelope.to_json()
+            await self.websocket.send(json_str)
+
+            self.logger.debug(f"发送信封: {envelope.envelope_type.value}")
+
+            # 记录指标（如果启用）
+            if self._metrics_enabled and self._metrics_collector:
+                await self._metrics_collector.record_envelope_sent(envelope)
+
+        except Exception as e:
+            self.logger.error(f"发送信封失败: {e}")
+            raise
+
+    async def send_message(self, message: Message, recipient: str) -> None:
+        """发送消息（包装在信封中）
+
+        Args:
+            message: 要发送的消息
+            recipient: 目标客户端ID
+        """
+        envelope = Envelope(
+            envelope_type=EnvelopeType.MESSAGE,
+            sender=self.client_info.client_id,
+            recipient=recipient,
+            message=message,
+        )
+        await self.send_envelope(envelope)
+
+    async def receive_loop(self) -> None:
+        """消息监听循环"""
+        try:
+            async for raw_message in self.websocket:
+                try:
+                    envelope = Envelope.from_json(raw_message)
+                    await self._handle_envelope(envelope)
+
+                except Exception as e:
+                    self.logger.error(f"处理消息失败: {e}")
+
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.info("WebSocket 连接已关闭")
+            self.connected = False
+        except Exception as e:
+            self.logger.error(f"消息循环出错: {e}")
+            self.connected = False
+
+    async def _handle_envelope(self, envelope: Envelope) -> None:
+        """处理接收到的信封"""
+        self.logger.debug(f"收到信封: {envelope.envelope_type.value}")
+
+        # 记录指标（如果启用）
+        if self._metrics_enabled and self._metrics_collector:
+            await self._metrics_collector.record_envelope_received(envelope)
+
+        # 根据信封类型分发到相应的处理方法
+        try:
+            if envelope.envelope_type == EnvelopeType.HEARTBEAT:
+                await self.on_heartbeat(envelope)
+            elif envelope.envelope_type == EnvelopeType.MESSAGE:
+                await self.on_message(envelope)
+            elif envelope.envelope_type == EnvelopeType.ERROR:
+                await self.on_error(envelope)
+            else:
+                self.logger.warning(f"未知信封类型: {envelope.envelope_type}")
+
+        except Exception as e:
+            self.logger.error(f"处理信封时出错: {e}")
+
+    # ===========================================
+    # 监控支持
+    # ===========================================
+
+    def enable_metrics(self, collector=None) -> None:
+        """启用监控
+
+        Args:
+            collector: 指标收集器，如果为 None 则使用默认收集器
+        """
+        self._metrics_enabled = True
+        if collector is None:
+            # 导入默认收集器
+            from ..monitor import MetricsCollector
+
+            self._metrics_collector = MetricsCollector()
+        else:
+            self._metrics_collector = collector
+
+    def disable_metrics(self) -> None:
+        """禁用监控"""
+        self._metrics_enabled = False
+        self._metrics_collector = None
+
+    # ===========================================
+    # 上下文响应处理
+    # ===========================================
+
+    async def _handle_outcome_response(self, outcome: OutcomeMessage) -> None:
+        """处理 outcome 响应，匹配到对应的 action 上下文
+
+        Args:
+            outcome: outcome 消息
+        """
+        # 尝试从 outcome 中提取对应的 action_id
+        action_id = getattr(outcome, "action_id", None)
+        if not action_id:
+            # 如果没有直接的 action_id，尝试从 data 中提取
+            if hasattr(outcome, "data") and isinstance(outcome.data, dict):
+                action_id = outcome.data.get("action_id") or outcome.data.get(
+                    "request_id"
+                )
+
+        if action_id:
+            # 尝试完成对应的上下文
+            success = self.context.complete_request(action_id, outcome)
+            if success:
+                self.logger.debug(f"匹配到 action 上下文: {action_id}")
+            else:
+                self.logger.debug(f"未找到匹配的 action 上下文: {action_id}")
+
+    async def _handle_event_response(self, event: EventMessage) -> None:
+        """处理 event 响应，匹配到对应的上下文
+
+        Args:
+            event: event 消息
+        """
+        # 尝试从 event 中提取对应的请求ID
+        request_id = None
+        if hasattr(event, "data") and isinstance(event.data, dict):
+            request_id = event.data.get("request_id") or event.data.get("action_id")
+
+        # 特殊处理一些系统事件
+        if event.event == "client_registered":
+            # 处理客户端注册确认
+            self.logger.debug("收到客户端注册确认")
+            return
+        elif event.event == "agent_joined":
+            # 处理 agent 加入通知
+            self.logger.debug(f"收到 agent 加入通知: {event.data}")
             return
 
-        self.monitor.info("Disconnecting...")
-        self.monitor.set_status("断开连接中")
-        self._running = False
+        if request_id:
+            # 尝试完成对应的上下文
+            success = self.context.complete_request(request_id, event)
+            if success:
+                self.logger.debug(f"匹配到 event 上下文: {request_id}")
 
-        # 取消接收任务
-        if self._receive_task:
-            self._receive_task.cancel()
-            try:
-                await self._receive_task
-            except asyncio.CancelledError:
-                pass
+    # ===========================================
+    # 便捷的发送方法（带上下文管理）
+    # ===========================================
 
-        # 关闭 session 连接
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-        self.is_connected = False
-        await self._on_disconnected()
-        self.monitor.info("Disconnected")
-        self.monitor.set_status("已断开")
-        self.monitor.update_stats(连接状态="已断开")
-
-    async def send_message(
+    async def send_action_with_context(
         self,
-        message_type: str,
-        payload: Any,
-        recipient: Optional[ClientInfo] = None,
-        validate: bool = True,
-    ) -> bool:
-        """发送消息"""
-        if not self.is_connected or not self.session:
-            self.monitor.error("Not connected")
-            return False
+        action: str,
+        params: Dict[str, Any],
+        recipient: str,
+        timeout: Optional[float] = None,
+        wait_for_outcome: bool = True,
+    ) -> Any:
+        """发送 action 并等待 outcome（带上下文管理）
 
-        try:
-            # 设置默认接收者为 Hub
-            if recipient is None:
-                recipient = ClientInfo(id="hub", type=ClientType.HUB)
+        Args:
+            action: 动作名称
+            params: 动作参数
+            recipient: 接收者
+            timeout: 超时时间
+            wait_for_outcome: 是否等待 outcome
 
-            # 创建消息
-            message = Message(
-                type=message_type,
-                sender=self.client_info,
-                recipient=recipient,
-                payload=payload,
-            )
+        Returns:
+            如果 wait_for_outcome=True，返回 outcome 消息；否则返回 request_id
+        """
+        from ..protocol import ActionMessage, Envelope, EnvelopeType
 
-            # 验证消息（如果启用）
-            if validate and self.validator:
-                try:
-                    self.validator.validate_message(message.to_dict())
-                except ValidationError as e:
-                    self.monitor.error(f"Message validation failed: {e}")
-                    return False
+        # 创建上下文
+        context_item = self.context.create_request_context(
+            request_type="action",
+            request_data={"action": action, "params": params, "recipient": recipient},
+            timeout=timeout,
+        )
 
-            # 发送消息
-            message_json = MessageParser.to_json(message)
-            await self.session.send(message_json)
+        request_id = context_item.request_id
 
-            self.monitor.debug(f"Sent {message.type} message to {recipient.id}")
-            # 更新统计信息
-            current_stats = getattr(self.monitor, "_stats", {})
-            sent_count = current_stats.get("已发送消息", 0) + 1
-            self.monitor.update_stats(已发送消息=sent_count)
+        # 创建 action 消息
+        action_message = ActionMessage(
+            action=action,
+            parameters=params,
+            action_id=request_id,  # 使用 request_id 作为 action_id
+        )
 
-            return True
+        # 创建信封并发送
+        envelope = Envelope(
+            envelope_type=EnvelopeType.MESSAGE,
+            sender=self.client_id,
+            recipient=recipient,
+            message=action_message,
+        )
 
-        except Exception as e:
-            self.monitor.error(f"Failed to send message: {e}")
-            return False
+        await self.send_envelope(envelope)
+        self.logger.debug(f"发送 action: {action} (ID: {request_id})")
 
-    async def _receive_messages(self) -> None:
-        """接收消息的后台任务"""
-        while self._running and self.session:
+        if wait_for_outcome:
+            # 等待响应
             try:
-                message_json = await self.session.recv()
-                await self._handle_received_message(message_json)
-
-            except ConnectionClosed:
-                self.monitor.info("Connection closed by server")
-                break
-            except WebSocketException as e:
-                self.monitor.error(f"Session error: {e}")
-                break
-            except Exception as e:
-                self.monitor.error(f"Error receiving message: {e}")
-                await asyncio.sleep(0.1)  # 避免紧密循环
-
-        # 连接断开
-        if self._running:
-            self.is_connected = False
-            await self._on_disconnected()
-
-    async def _handle_received_message(self, message_json: str) -> None:
-        """处理接收到的消息"""
-        try:
-            # 解析消息
-            message = MessageParser.parse_json(message_json)
-
-            self.monitor.debug(
-                f"Received message: {message.type} from {message.sender.id}"
-            )
-
-            # 验证消息（如果启用）
-            if self.validator:
-                try:
-                    self.validator.validate_message(message.to_dict())
-                except ValidationError as e:
-                    self.monitor.warning(f"Received invalid message: {e}")
-                    return
-
-            # 更新接收统计
-            current_stats = getattr(self.monitor, "_stats", {})
-            received_count = current_stats.get("已接收消息", 0) + 1
-            self.monitor.update_stats(已接收消息=received_count)
-
-            # 分发消息到处理器
-            await self._dispatch_message(message)
-
-        except Exception as e:
-            self.logger.error(f"Error handling message: {e}")
-
-    async def _dispatch_message(self, message: Message) -> None:
-        """分发消息到相应的处理器"""
-        message_type = message.type
-
-        # 根据外层协议类型分发
-        if message_type == "message":
-            await self.on_message(message)
-        elif message_type == "error":
-            await self.on_error(message)
-        elif message_type == "heartbeat":
-            await self.on_heartbeat(message)
+                outcome = await self.context.wait_for_response(request_id, timeout)
+                return outcome
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Action {action} (ID: {request_id}) 超时")
+                raise
         else:
-            self.monitor.warning(f"Unknown message type: {message_type}")
+            return request_id
 
-    # -------- 协议处理方法（子类应该覆盖） --------
-    async def on_message(self, message: Message) -> None:
+    async def send_event_with_context(
+        self,
+        event: str,
+        data: Dict[str, Any],
+        recipient: str,
+        timeout: Optional[float] = None,
+        wait_for_response: bool = False,
+    ) -> Any:
+        """发送 event（带上下文管理）
+
+        Args:
+            event: 事件名称
+            data: 事件数据
+            recipient: 接收者
+            timeout: 超时时间
+            wait_for_response: 是否等待响应
+
+        Returns:
+            如果 wait_for_response=True，返回响应消息；否则返回 request_id
         """
-        处理 message 协议
+        from ..protocol import EventMessage, Envelope, EnvelopeType
 
-        子类应该覆盖此方法来实现自定义的消息处理逻辑
-        """
-        self.monitor.info(f"Received message from {message.sender.id}")
-
-    async def on_error(self, message: Message) -> None:
-        """
-        处理 error 协议
-
-        子类应该覆盖此方法来实现自定义的错误处理逻辑
-        """
-        self.monitor.error(f"Received error: {message.payload}")
-
-    async def on_heartbeat(self, message: Message) -> None:
-        """
-        处理 heartbeat 协议
-
-        子类应该覆盖此方法来实现自定义的心跳处理逻辑
-        """
-        self.monitor.debug("Received heartbeat")
-
-    # -------- 消息处理器设置（子类可以覆盖） --------
-    def _setup_message_handlers(self) -> None:
-        """
-        设置消息处理器
-
-        子类可以覆盖此方法来设置自定义的消息处理器
-        """
-        pass
-
-    # 生命周期钩子
-    async def _on_connected(self) -> None:
-        """连接成功后的回调"""
-        pass
-
-    async def _on_disconnected(self) -> None:
-        """断开连接后的回调"""
-        pass
-
-    # 上下文管理器支持
-    async def __aenter__(self):
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.disconnect()
-
-    def __repr__(self) -> str:
-        status = "connected" if self.is_connected else "disconnected"
-        return f"<{self.__class__.__name__} {self.client_info.id} ({status})>"
-
-    async def heartbeat(self) -> bool:
-        """发送心跳消息"""
-        if not self.is_connected or not self.session:
-            self.monitor.error("Not connected")
-            return False
-
-        try:
-            heartbeat_message = Message(
-                type="heartbeat",
-                sender=self.client_info,
-                recipient=ClientInfo(id="hub", type=ClientType.HUB),
-                payload={},
+        # 创建上下文（如果需要等待响应）
+        request_id = None
+        if wait_for_response:
+            context_item = self.context.create_request_context(
+                request_type="event",
+                request_data={"event": event, "data": data, "recipient": recipient},
+                timeout=timeout,
             )
-            message_json = MessageParser.to_json(heartbeat_message)
-            await self.session.send(message_json)
+            request_id = context_item.request_id
+            # 将 request_id 添加到 data 中
+            data = {**data, "request_id": request_id}
 
-            self.monitor.debug("Sent heartbeat message")
-            return True
+        # 创建 event 消息
+        event_message = EventMessage(event=event, data=data)
 
-        except Exception as e:
-            self.monitor.error(f"Failed to send heartbeat: {e}")
-            return False
+        # 创建信封并发送
+        envelope = Envelope(
+            envelope_type=EnvelopeType.MESSAGE,
+            sender=self.client_id,
+            recipient=recipient,
+            message=event_message,
+        )
+
+        await self.send_envelope(envelope)
+        self.logger.debug(f"发送 event: {event} (ID: {request_id})")
+
+        if wait_for_response and request_id:
+            # 等待响应
+            try:
+                response = await self.context.wait_for_response(request_id, timeout)
+                return response
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Event {event} (ID: {request_id}) 超时")
+                raise
+        else:
+            return request_id
+
+    def get_context_stats(self) -> Dict[str, Any]:
+        """获取上下文统计信息"""
+        return self.context.get_stats()

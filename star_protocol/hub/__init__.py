@@ -1,22 +1,20 @@
 """
-Star Protocol Hub Module
+Hub 服务器模块
 
-WebSocket server implementation and connection management
+中央路由和会话管理：
+- 服务器实现
+- 路由逻辑
+- 连接管理
 """
 
-from .server import StarHubServer, run_server
-from .session import SessionManager, Session
+from .server import HubServer, start_hub_server
 from .router import MessageRouter
-from .auth import AuthenticationService, UserCredentials, APIKey, AuthToken
+from .manager import ConnectionManager, Connection
 
 __all__ = [
-    "StarHubServer",
-    "run_server",
-    "SessionManager",
-    "Session",
+    "HubServer",
+    "start_hub_server",
     "MessageRouter",
-    "AuthenticationService",
-    "UserCredentials",
-    "APIKey",
-    "AuthToken",
+    "ConnectionManager",
+    "Connection",
 ]

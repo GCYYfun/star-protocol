@@ -1,244 +1,195 @@
-"""
-Star Protocol 日志工具
+"""Star Protocol 日志系统
 
-提供统一的日志配置和管理
+本模块提供统一的日志接口，支持标准日志和富文本日志（可选）。
+支持文件日志、控制台日志，以及为不同模块提供专用的日志器。
 """
 
 import logging
-import logging.handlers
 import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Optional, Dict, Any
-import json
+from typing import Optional
+from .config import get_config
+from rich.logging import RichHandler
 
 
-class StarProtocolFormatter(logging.Formatter):
-    """Star Protocol 自定义日志格式器"""
-    
-    def __init__(self, include_extra: bool = True):
-        self.include_extra = include_extra
-        super().__init__()
-    
-    def format(self, record: logging.LogRecord) -> str:
-        # 基础格式
-        timestamp = datetime.fromtimestamp(record.created).isoformat()
-        
-        log_entry = {
-            "timestamp": timestamp,
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-            "module": record.module,
-            "function": record.funcName,
-            "line": record.lineno
-        }
-        
-        # 添加异常信息
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-        
-        # 添加额外字段
-        if self.include_extra:
-            extra_fields = {}
-            for key, value in record.__dict__.items():
-                if key not in {
-                    'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
-                    'filename', 'module', 'exc_info', 'exc_text', 'stack_info',
-                    'lineno', 'funcName', 'created', 'msecs', 'relativeCreated',
-                    'thread', 'threadName', 'processName', 'process', 'getMessage'
-                }:
-                    extra_fields[key] = value
-            
-            if extra_fields:
-                log_entry["extra"] = extra_fields
-        
-        return json.dumps(log_entry, ensure_ascii=False, default=str)
-
-
-class StarProtocolLogger:
-    """Star Protocol 日志管理器"""
-    
-    def __init__(
-        self,
-        name: str = "star_protocol",
-        level: str = "INFO",
-        log_file: Optional[str] = None,
-        max_file_size: int = 10 * 1024 * 1024,  # 10MB
-        backup_count: int = 5,
-        console_output: bool = True,
-        json_format: bool = False
-    ):
-        self.name = name
-        self.level = getattr(logging, level.upper())
-        self.log_file = log_file
-        self.max_file_size = max_file_size
-        self.backup_count = backup_count
-        self.console_output = console_output
-        self.json_format = json_format
-        
-        self.logger = logging.getLogger(name)
-        self.logger.setLevel(self.level)
-        
-        # 清除现有处理器
-        self.logger.handlers.clear()
-        
-        # 设置处理器
-        self._setup_handlers()
-    
-    def _setup_handlers(self) -> None:
-        """设置日志处理器"""
-        # 控制台处理器
-        if self.console_output:
-            console_handler = logging.StreamHandler(sys.stdout)
-            console_handler.setLevel(self.level)
-            
-            if self.json_format:
-                console_formatter = StarProtocolFormatter()
-            else:
-                console_formatter = logging.Formatter(
-                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                )
-            
-            console_handler.setFormatter(console_formatter)
-            self.logger.addHandler(console_handler)
-        
-        # 文件处理器
-        if self.log_file:
-            # 确保日志目录存在
-            log_path = Path(self.log_file)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            file_handler = logging.handlers.RotatingFileHandler(
-                self.log_file,
-                maxBytes=self.max_file_size,
-                backupCount=self.backup_count,
-                encoding='utf-8'
-            )
-            file_handler.setLevel(self.level)
-            
-            # 文件日志始终使用 JSON 格式便于分析
-            file_formatter = StarProtocolFormatter()
-            file_handler.setFormatter(file_formatter)
-            self.logger.addHandler(file_handler)
-    
-    def get_logger(self) -> logging.Logger:
-        """获取 logger 实例"""
-        return self.logger
-    
-    def add_context_filter(self, **context: Any) -> None:
-        """添加上下文过滤器"""
-        class ContextFilter(logging.Filter):
-            def filter(self, record):
-                for key, value in context.items():
-                    setattr(record, key, value)
-                return True
-        
-        self.logger.addFilter(ContextFilter())
-    
-    def set_level(self, level: str) -> None:
-        """设置日志级别"""
-        new_level = getattr(logging, level.upper())
-        self.logger.setLevel(new_level)
-        for handler in self.logger.handlers:
-            handler.setLevel(new_level)
-
-
-def setup_logging(
-    level: str = "INFO",
+def setup_logger(
+    name: str = "star_protocol",
+    level: Optional[str] = None,
     log_file: Optional[str] = None,
-    json_format: bool = False,
-    console_output: bool = True
+    enable_rich: Optional[bool] = None,
 ) -> logging.Logger:
-    """快速设置日志"""
-    star_logger = StarProtocolLogger(
-        level=level,
-        log_file=log_file,
-        json_format=json_format,
-        console_output=console_output
-    )
-    return star_logger.get_logger()
+    """设置日志器
 
+    创建并配置一个日志器实例。支持控制台输出和文件输出。
 
-def get_client_logger(
-    client_type: str,
-    client_id: str,
-    level: str = "INFO"
-) -> logging.Logger:
-    """获取客户端专用 logger"""
-    logger_name = f"star_protocol.{client_type}.{client_id}"
-    logger = logging.getLogger(logger_name)
-    
-    if not logger.handlers:
-        # 继承根 logger 的配置
-        parent_logger = logging.getLogger("star_protocol")
-        if parent_logger.handlers:
-            logger.setLevel(parent_logger.level)
-            for handler in parent_logger.handlers:
-                logger.addHandler(handler)
-        else:
-            # 如果没有父 logger，使用默认配置
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                f'%(asctime)s - {client_type}:{client_id} - %(levelname)s - %(message)s'
+    Args:
+        name: 日志器名称
+        level: 日志级别，默认从配置读取
+        log_file: 日志文件路径，默认从配置读取
+        enable_rich: 是否启用 rich 日志，默认从配置读取
+
+    Returns:
+        配置好的日志器
+    """
+    config = get_config()
+
+    # 使用参数或配置中的值
+    level = level or config.log_level
+    log_file = log_file or config.log_file
+    enable_rich = enable_rich if enable_rich is not None else config.enable_rich_logging
+
+    # 创建日志器
+    logger = logging.getLogger(name)
+    logger.setLevel(getattr(logging, level.upper()))
+
+    # 清除现有处理器
+    logger.handlers.clear()
+
+    # 创建格式器
+    if enable_rich:
+        try:
+
+            # Rich 处理器
+            rich_handler = RichHandler(
+                rich_tracebacks=True, show_time=True, show_level=True, show_path=True
             )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(getattr(logging, level.upper()))
-    
+            rich_handler.setLevel(getattr(logging, level.upper()))
+            logger.addHandler(rich_handler)
+
+            # 当使用 Rich 时，不添加标准控制台处理器
+
+        except ImportError:
+            # Rich 不可用，降级到标准日志
+            enable_rich = False
+
+    if not enable_rich:
+        # 标准控制台处理器（仅当 Rich 不可用时）
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(getattr(logging, level.upper()))
+
+        formatter = logging.Formatter(config.log_format)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    # 文件处理器（如果指定了日志文件）
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(getattr(logging, level.upper()))
+
+        formatter = logging.Formatter(config.log_format)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
     return logger
 
 
-def get_hub_logger(level: str = "INFO") -> logging.Logger:
-    """获取 Hub 专用 logger"""
-    return get_client_logger("hub", "server", level)
+def get_logger(name: str = "star_protocol") -> logging.Logger:
+    """获取日志器
+
+    获取指定名称的日志器。子日志器通过继承父日志器的配置。
+    只有根日志器（"star_protocol"）需要配置 handler。
+
+    Args:
+        name: 日志器名称
+
+    Returns:
+        日志器实例
+    """
+    logger = logging.getLogger(name)
+
+    # 只为根日志器配置 handler，子日志器继承父日志器配置
+    if name == "star_protocol":
+        if not logger.handlers:
+            return setup_logger(name)
+    else:
+        # 确保根日志器已经配置
+        root_logger = logging.getLogger("star_protocol")
+        if not root_logger.handlers:
+            setup_logger("star_protocol")
+
+        # 子日志器不需要 handler，会继承父日志器的配置
+        # 设置适当的日志级别
+        if not logger.level:
+            config = get_config()
+            logger.setLevel(getattr(logging, config.log_level.upper()))
+
+    return logger
 
 
-class LoggerMixin:
-    """日志混入类"""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._setup_logger()
-    
-    def _setup_logger(self) -> None:
-        """设置 logger"""
-        class_name = self.__class__.__name__
-        self.logger = logging.getLogger(f"star_protocol.{class_name}")
-    
-    def log_method_call(self, method_name: str, **kwargs) -> None:
-        """记录方法调用"""
-        self.logger.debug(f"Calling {method_name}", extra={"method": method_name, "args": kwargs})
-    
-    def log_error(self, error: Exception, context: str = "") -> None:
-        """记录错误"""
-        self.logger.error(f"Error in {context}: {error}", exc_info=True, extra={"context": context})
+# === 预定义的专用日志器 ===
 
 
-# 预定义的 logger 实例
-def create_default_loggers():
-    """创建默认的 logger 实例"""
-    # 主 logger
-    main_logger = setup_logging(
-        level="INFO",
-        log_file="logs/star_protocol.log",
-        json_format=False,
-        console_output=True
-    )
-    
-    # Hub logger
-    hub_logger = get_hub_logger("INFO")
-    
-    return {
-        "main": main_logger,
-        "hub": hub_logger
-    }
+def get_protocol_logger() -> logging.Logger:
+    """获取协议模块日志器
+
+    Returns:
+        协议模块专用日志器
+    """
+    return get_logger("star_protocol.protocol")
 
 
-# 日志级别常量
-class LogLevel:
-    DEBUG = "DEBUG"
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
+def get_client_logger() -> logging.Logger:
+    """获取客户端模块日志器
+
+    Returns:
+        客户端模块专用日志器
+    """
+    return get_logger("star_protocol.client")
+
+
+def get_hub_logger() -> logging.Logger:
+    """获取 Hub 模块日志器
+
+    Returns:
+        Hub 模块专用日志器
+    """
+    return get_logger("star_protocol.hub")
+
+
+def get_monitor_logger() -> logging.Logger:
+    """获取监控模块日志器
+
+    Returns:
+        监控模块专用日志器
+    """
+    return get_logger("star_protocol.monitor")
+
+
+def get_utils_logger() -> logging.Logger:
+    """获取工具模块日志器
+
+    Returns:
+        工具模块专用日志器
+    """
+    return get_logger("star_protocol.utils")
+
+
+# === 便捷函数 ===
+
+
+def configure_logging(
+    level: str = "INFO", enable_rich: bool = False, log_file: Optional[str] = None
+) -> None:
+    """配置全局日志
+
+    一次性配置所有模块的日志设置。
+
+    Args:
+        level: 日志级别
+        enable_rich: 是否启用 rich 日志
+        log_file: 日志文件路径
+    """
+    # 更新配置
+    from .config import update_config
+
+    update_config(log_level=level, enable_rich_logging=enable_rich, log_file=log_file)
+
+    # 重新配置根日志器
+    setup_logger("star_protocol", level, log_file, enable_rich)
+
+
+def disable_logging() -> None:
+    """禁用所有日志输出
+
+    将日志级别设置为 CRITICAL 以上，实际上禁用所有日志。
+    """
+    logging.getLogger("star_protocol").setLevel(logging.CRITICAL + 1)
