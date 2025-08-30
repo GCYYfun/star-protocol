@@ -31,7 +31,7 @@ from star_protocol.protocol import (
     EventMessage,
 )
 from star_protocol.monitor import create_simple_monitor
-from star_protocol.utils import setup_logger, get_logger
+from star_protocol.utils import get_logger
 from star_protocol.cli import create_environment_cli
 
 
@@ -253,8 +253,7 @@ class EnvironmentDemo:
         self.interactive = interactive
 
         # 设置日志
-        setup_logger(level=log_level, enable_rich=True)
-        self.logger = get_logger(f"star_protocol.environment_{env_id}")
+        self.logger = get_logger(f"environment_{env_id}")
 
         # 创建世界
         self.world = SimpleWorld(world_size)
@@ -462,6 +461,32 @@ class EnvironmentDemo:
                 self.dialog_count += 1
             else:
                 self.dialog_count = 1
+
+        @self.client.action("move")
+        async def on_move_action(action: ActionMessage):
+            direction = action.parameters.get("direction")
+            self.logger.info(f"➡️ Agent 请求移动: {direction}")
+            await asyncio.sleep(1)
+            result = "agent 正在移动"
+            self.logger.info(f"➡️ Agent 结果: {result}")
+            return {"success": True, "result": result}
+
+        @self.client.action("get_action_list")
+        async def on_list_action(action: ActionMessage):
+            # direction = action.parameters.get("direction")
+            self.logger.info(f"➡️ Agent 请求 list")
+            await asyncio.sleep(1)
+            result = "可用动作: move(direction), look(range), get_world_state, ping"
+
+            # async def reply_action(data, action_message):
+            #     action_id = action_message.action_id
+            #     outcome = action_message.action
+            #     recipient = action_message.sender
+            # await self.client.send_outcome(
+            #     action_id=action_id, outcome=outcome, data=data, recipient=recipient
+            # )
+
+            return {"success": True, "result": result}
 
     async def _handle_agent_action(self, agent_id: str, action: ActionMessage) -> None:
         """处理 Agent 动作"""

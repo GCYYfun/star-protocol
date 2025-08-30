@@ -11,7 +11,7 @@ from ..utils import get_logger
 T = TypeVar("T")
 
 
-class ContextStatus(Enum):
+class RequestStatus(Enum):
     """上下文状态"""
 
     PENDING = "pending"  # 等待响应
@@ -26,14 +26,15 @@ class ContextItem(Generic[T]):
 
     request_id: str
     request_type: str
-    request_data: Dict[str, Any]
-    status: ContextStatus = ContextStatus.PENDING
+    # request_data: Dict[str, Any]
+    # status: ContextStatus = ContextStatus.PENDING
+    status: RequestStatus = RequestStatus.PENDING
     created_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
-    timeout: float = 30.0
+    # timeout: float = 30.0
     future: Optional[asyncio.Future[T]] = None
     callback: Optional[Callable[[T], Awaitable[None]]] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    # metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.future is None:
@@ -46,40 +47,40 @@ class ContextItem(Generic[T]):
             return self.completed_at - self.created_at
         return time.time() - self.created_at
 
-    @property
-    def is_expired(self) -> bool:
-        """检查是否超时"""
-        return self.elapsed_time > self.timeout
+    # @property
+    # def is_expired(self) -> bool:
+    #     """检查是否超时"""
+    #     return self.elapsed_time > self.timeout
 
     def complete(self, result: T) -> None:
         """完成上下文项"""
-        if self.status != ContextStatus.PENDING:
+        if self.status != RequestStatus.PENDING:
             return
 
-        self.status = ContextStatus.COMPLETED
-        self.completed_at = time.time()
+        self.status = RequestStatus.COMPLETED
+        # self.completed_at = time.time()
 
         if self.future and not self.future.done():
             self.future.set_result(result)
 
     def error(self, exception: Exception) -> None:
         """设置错误状态"""
-        if self.status != ContextStatus.PENDING:
+        if self.status != RequestStatus.PENDING:
             return
 
-        self.status = ContextStatus.ERROR
-        self.completed_at = time.time()
+        self.status = RequestStatus.ERROR
+        # self.completed_at = time.time()
 
         if self.future and not self.future.done():
             self.future.set_exception(exception)
 
     def timeout_expired(self) -> None:
         """设置超时状态"""
-        if self.status != ContextStatus.PENDING:
+        if self.status != RequestStatus.PENDING:
             return
 
-        self.status = ContextStatus.TIMEOUT
-        self.completed_at = time.time()
+        self.status = RequestStatus.TIMEOUT
+        # self.completed_at = time.time()
 
         if self.future and not self.future.done():
             self.future.set_exception(
@@ -117,35 +118,35 @@ class ClientContext:
         }
 
         # 清理任务
-        self._cleanup_task: Optional[asyncio.Task] = None
-        self._cleanup_interval = 60.0  # 60秒清理一次
+        # self._cleanup_task: Optional[asyncio.Task] = None
+        # self._cleanup_interval = 60.0  # 60秒清理一次
 
-        self.logger = get_logger(f"star_protocol.client.context.{client_id}")
+        self.logger = get_logger(f"context.{client_id}")
 
-    async def start(self) -> None:
-        """启动上下文管理器"""
-        if self._cleanup_task is None:
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            self.logger.debug("上下文管理器已启动")
+    # async def start(self) -> None:
+    #     """启动上下文管理器"""
+    #     if self._cleanup_task is None:
+    #         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+    #         self.logger.debug("上下文管理器已启动")
 
-    async def stop(self) -> None:
-        """停止上下文管理器"""
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
-            self._cleanup_task = None
-            self.logger.debug("上下文管理器已停止")
+    # async def stop(self) -> None:
+    #     """停止上下文管理器"""
+    #     if self._cleanup_task:
+    #         self._cleanup_task.cancel()
+    #         try:
+    #             await self._cleanup_task
+    #         except asyncio.CancelledError:
+    #             pass
+    #         self._cleanup_task = None
+    #         self.logger.debug("上下文管理器已停止")
 
     def create_request_context(
         self,
         request_type: str,
-        request_data: Dict[str, Any],
+        # request_data: Dict[str, Any],
         timeout: Optional[float] = None,
         callback: Optional[Callable[[Any], Awaitable[None]]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        # metadata: Optional[Dict[str, Any]] = None,
         request_id: Optional[str] = None,
     ) -> ContextItem:
         """创建请求上下文
@@ -170,10 +171,10 @@ class ClientContext:
         context_item = ContextItem(
             request_id=request_id,
             request_type=request_type,
-            request_data=request_data,
-            timeout=timeout,
+            # request_data=request_data,
+            # timeout=timeout,
             callback=callback,
-            metadata=metadata or {},
+            # metadata=metadata or {},
         )
 
         # 存储上下文
@@ -211,7 +212,7 @@ class ClientContext:
             self.logger.warning(f"未找到上下文: {request_id}")
             return False
 
-        if context_item.status != ContextStatus.PENDING:
+        if context_item.status != RequestStatus.PENDING:
             self.logger.warning(
                 f"上下文 {request_id} 已经完成，状态: {context_item.status}"
             )
@@ -246,7 +247,7 @@ class ClientContext:
             self.logger.warning(f"未找到上下文: {request_id}")
             return False
 
-        if context_item.status != ContextStatus.PENDING:
+        if context_item.status != RequestStatus.PENDING:
             return False
 
         context_item.error(exception)
@@ -258,7 +259,7 @@ class ClientContext:
     async def wait_for_response(
         self,
         request_id: str,
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = 600,
     ) -> Any:
         """等待响应
 
@@ -281,8 +282,8 @@ class ClientContext:
         if not context_item.future:
             raise RuntimeError(f"上下文 {request_id} 没有 future")
 
-        if timeout is None:
-            timeout = context_item.timeout
+        # if timeout is None:
+        #     timeout = context_item.timeout
 
         try:
             result = await asyncio.wait_for(context_item.future, timeout=timeout)
@@ -294,7 +295,7 @@ class ClientContext:
             self.logger.warning(f"上下文超时: {request_id}")
             raise
 
-    def get_context(self, request_id: str) -> Optional[ContextItem]:
+    def get_request_context(self, request_id: str) -> Optional[ContextItem]:
         """获取上下文项"""
         return self._contexts.get(request_id)
 
@@ -312,7 +313,7 @@ class ClientContext:
         return {
             request_id: context
             for request_id, context in self._contexts.items()
-            if context.status == ContextStatus.PENDING
+            if context.status == RequestStatus.PENDING
         }
 
     def remove_context(self, request_id: str) -> bool:
@@ -355,42 +356,42 @@ class ClientContext:
         except Exception as e:
             self.logger.error(f"回调执行失败 {context_item.request_id}: {e}")
 
-    async def _cleanup_loop(self) -> None:
-        """清理循环，移除过期的上下文"""
-        while True:
-            try:
-                await asyncio.sleep(self._cleanup_interval)
-                await self._cleanup_expired_contexts()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.logger.error(f"清理循环出错: {e}")
+    # async def _cleanup_loop(self) -> None:
+    #     """清理循环，移除过期的上下文"""
+    #     while True:
+    #         try:
+    #             await asyncio.sleep(self._cleanup_interval)
+    #             await self._cleanup_expired_contexts()
+    #         except asyncio.CancelledError:
+    #             break
+    #         except Exception as e:
+    #             self.logger.error(f"清理循环出错: {e}")
 
-    async def _cleanup_expired_contexts(self) -> None:
-        """清理过期的上下文"""
-        expired_ids = []
+    # async def _cleanup_expired_contexts(self) -> None:
+    #     """清理过期的上下文"""
+    #     expired_ids = []
 
-        for request_id, context_item in self._contexts.items():
-            if context_item.status == ContextStatus.PENDING and context_item.is_expired:
-                # 标记为超时
-                context_item.timeout_expired()
-                self._stats["timeout_requests"] += 1
-                expired_ids.append(request_id)
-            elif context_item.status in [
-                ContextStatus.COMPLETED,
-                ContextStatus.TIMEOUT,
-                ContextStatus.ERROR,
-            ]:
-                # 清理已完成的上下文（保留一段时间后清理）
-                if context_item.elapsed_time > 300:  # 5分钟后清理
-                    expired_ids.append(request_id)
+    #     for request_id, context_item in self._contexts.items():
+    #         if context_item.status == RequestStatus.PENDING and context_item.is_expired:
+    #             # 标记为超时
+    #             context_item.timeout_expired()
+    #             self._stats["timeout_requests"] += 1
+    #             expired_ids.append(request_id)
+    #         elif context_item.status in [
+    #             RequestStatus.COMPLETED,
+    #             RequestStatus.TIMEOUT,
+    #             RequestStatus.ERROR,
+    #         ]:
+    #             # 清理已完成的上下文（保留一段时间后清理）
+    #             if context_item.elapsed_time > 300:  # 5分钟后清理
+    #                 expired_ids.append(request_id)
 
-        # 移除过期的上下文
-        for request_id in expired_ids:
-            self.remove_context(request_id)
+    #     # 移除过期的上下文
+    #     for request_id in expired_ids:
+    #         self.remove_context(request_id)
 
-        if expired_ids:
-            self.logger.debug(f"清理了 {len(expired_ids)} 个过期上下文")
+    #     if expired_ids:
+    #         self.logger.debug(f"清理了 {len(expired_ids)} 个过期上下文")
 
 
 # 便捷的装饰器和工具函数
@@ -399,7 +400,7 @@ class ClientContext:
 def with_context(
     context_manager: ClientContext,
     request_type: str,
-    timeout: Optional[float] = None,
+    timeout: Optional[float] = 600,
     callback: Optional[Callable] = None,
 ):
     """装饰器：自动管理上下文"""
@@ -416,7 +417,7 @@ def with_context(
             # 创建上下文
             context_item = context_manager.create_request_context(
                 request_type=request_type,
-                request_data=request_data,
+                # request_data=request_data,
                 timeout=timeout,
                 callback=callback,
             )

@@ -16,6 +16,7 @@ import json
 import random
 import sys
 import time
+import traceback
 import platform
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
@@ -25,6 +26,10 @@ from menglong.ml_model.schema.ml_request import (
     UserMessage as user,
     AssistantMessage as assistant,
 )
+
+from menglong.agents.component.tool_manager import tool, ToolInfo
+
+from star_protocol.protocol.messages import OutcomeMessage
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -38,7 +43,7 @@ from star_protocol.protocol import (
     EventMessage,
 )
 from star_protocol.monitor import create_simple_monitor
-from star_protocol.utils import setup_logger, get_logger
+from star_protocol.utils import get_logger
 from star_protocol.cli import create_agent_cli
 from star_protocol.protocol import EventMessage
 
@@ -76,6 +81,45 @@ async def agent_chat_command(cli, args):
         cli.console.print(f"🤖 AI 回复: {response}")
 
     except Exception as e:
+        traceback.print_exc()
+        cli.console.print(f"❌ 聊天失败: {e}")
+
+
+@command_with_args(
+    name="move",
+    description="移动智能体",
+    expected_args=None,  # 允许可变参数
+    usage="move <direction>",
+)
+async def agent_move_command(cli, args):
+    """移动命令实现"""
+    try:
+        # 从CLI上下文获取当前的agent实例
+        agent_demo: AgentDemo = cli.get_context("agent_demo")
+        if not agent_demo:
+            cli.console.print("❌ 无法找到 Agent 实例")
+            return
+
+        if not agent_demo.llm_agent:
+            cli.console.print("❌ 当前 Agent 不是 LLM 类型，无法聊天")
+            return
+
+        if len(args) < 1:
+            cli.console.print("❌ 请提供要聊天的内容")
+            cli.console.print("用法: agent_chat <prompt>")
+            return
+
+        direction = " ".join(args)  # 合并所有参数为一个提示
+        cli.console.print(f"🚶 移动方向: {direction}")
+
+        param = {"direction": direction}
+
+        # 调用同步的 chat 方法
+        response = await agent_demo.perform_action("move", param)
+        cli.console.print(f"🤖 AI 回复: {response}")
+
+    except Exception as e:
+        traceback.print_exc()
         cli.console.print(f"❌ 聊天失败: {e}")
 
 
@@ -114,6 +158,7 @@ async def agent_dialog_command(cli, args):
         cli.console.print(f"📤 {response}")
 
     except Exception as e:
+        traceback.print_exc()
         cli.console.print(f"❌ 发起对话失败: {e}")
 
 
@@ -136,21 +181,29 @@ async def agent_task_command(cli, args):
             cli.console.print("❌ 当前 Agent 不是 LLM 类型，无法发起对话")
             return
 
-        if len(args) < 2:
-            cli.console.print("❌ 请提供对话对象和主题")
-            cli.console.print("用法: dialog <who> <topic>")
-            cli.console.print("示例: dialog agent_123 天气")
-            cli.console.print("示例: dialog npc_guard 任务")
+        if len(args) < 1:
+            cli.console.print("❌ 请提供任务描述")
+            cli.console.print("用法: task <task_desc>")
             return
 
-        task_desc = " ".join(args)  # 合并所有参数为一个任务描述
+        task_desc = (
+            " ".join(args) + ",输出[DONE] 停止对话."
+        )  # 合并所有参数为一个任务描述
         cli.console.print(f"🎯 规划执行任务: {task_desc}")
 
-        # 调用 task 方法规划执行任务
-        response = await agent_demo.task(task_desc)
-        cli.console.print(f"📤 {response}")
+        try:
+            # 调用 task 方法规划执行任务
+            response = await agent_demo.task(task_desc)
+            cli.console.print(f"📤 {response}")
+            return
+        except Exception as inner_e:
+            print(f"💥 任务命令执行异常: {type(inner_e).__name__}: {inner_e}")
+            traceback.print_exc()
+            cli.console.print(f"❌ 任务执行失败: {inner_e}")
+            return
 
     except Exception as e:
+        traceback.print_exc()
         cli.console.print(f"❌ 发起对话失败: {e}")
 
 
@@ -193,6 +246,7 @@ async def agent_status_command(cli, args):
             cli.console.print(f"   对话消息: {summary['total_messages']} 条")
 
     except Exception as e:
+        traceback.print_exc()
         cli.console.print(f"❌ 获取状态失败: {e}")
 
 
@@ -230,6 +284,11 @@ class LLMAgent:
 
         self.context.append(assistant(content=response))
         return response
+
+    # async def task(self, task_desc: str) -> str:
+    #     """规划并执行任务"""
+    #     # 调用 LLM 生成任务规划
+    #     res = await self.agent.task(task=task_desc, tools=[available_actions])
 
     def get_conversation_summary(self) -> Dict[str, Any]:
         """获取对话摘要"""
@@ -523,7 +582,6 @@ class AgentDemo:
         self.enable_chat = enable_chat
 
         # 设置日志
-        setup_logger(level=log_level, enable_rich=True)
         self.logger = get_logger(f"agent_{agent_id}")
 
         # 创建 AI
@@ -638,6 +696,7 @@ class AgentDemo:
             await self._run_loop()
 
         except Exception as e:
+            traceback.print_exc()
             self.logger.error(f"❌ 启动 Agent 失败: {e}")
             raise
 
@@ -728,6 +787,7 @@ class AgentDemo:
                         f"📥 收到来自 {dialog_data.get('from_agent')} 的对话消息，已加入处理队列"
                     )
             except Exception as e:
+                traceback.print_exc()
                 self.logger.error(f"❌ 处理对话事件失败: {e}")
 
         @self.client.event("chat")
@@ -753,7 +813,16 @@ class AgentDemo:
                         f"📥 收到来自 {chat_data.get('from_agent')} 的传统聊天消息，已转换为对话格式"
                     )
             except Exception as e:
+                traceback.print_exc()
                 self.logger.error(f"❌ 处理聊天事件失败: {e}")
+
+        @self.client.outcome("move")
+        async def on_action_outcome(message: OutcomeMessage):
+            self.logger.info(f"🔔 动作结果: {message.outcome} - 结果: {message.data}")
+            context_item = self.client.context.get_request_context(message.action_id)
+            if context_item:
+                context_item.future.set_result(message.data)
+            await asyncio.sleep(0)  # Yield control to the event loop
 
     async def _run_loop(self) -> None:
         """主运行循环"""
@@ -771,6 +840,7 @@ class AgentDemo:
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                traceback.print_exc()
                 self.logger.error(f"❌ 运行循环错误: {e}")
 
     def _show_summary(self) -> None:
@@ -802,7 +872,26 @@ class AgentDemo:
         await self.llm_agent.chat(message)
 
     async def task(self, task_desc):
-        await self.llm_agent.agent.task(task_desc, tools=[])
+        try:
+            print(f"🎯 开始执行任务: {task_desc}")
+            # 直接传递绑定的实例方法
+            tools = [self.perform_action, self.available_actions]
+            print(f"🔧 可用工具: {[tool.__name__ for tool in tools]}")
+
+            # 添加详细的调试信息
+            try:
+                result = await self.llm_agent.agent.task(task_desc, tools=tools)
+                print(f"✅ 任务执行完成: {result}")
+                return result
+            except Exception as inner_e:
+                print(f"💥 LLM任务执行内部错误: {type(inner_e).__name__}: {inner_e}")
+                traceback.print_exc()
+                raise
+
+        except Exception as e:
+            traceback.print_exc()
+            self.logger.error(f"❌ 任务执行失败: {e}")
+            raise
 
     async def dialog(self, who: str, topic: str) -> str:
         """发起主题对话
@@ -866,8 +955,46 @@ class AgentDemo:
             return f"已向 {who} 发起主题对话 '{topic}'，开场白: {opening_message}"
 
         except Exception as e:
+            traceback.print_exc()
             self.logger.error(f"❌ 发起主题对话失败: {e}")
             return f"发起主题对话失败: {e}"
+
+    @tool
+    async def perform_action(self, action: str, params: Any):
+        """执行动作"""
+        try:
+            print(f"🚀 执行动作: {action}, 参数: {params}")
+            print(f"🔍 self.client 类型: {type(self.client)}")
+            print(f"🔍 client 连接状态: {getattr(self.client, 'connected', '未知')}")
+
+            response = None
+
+            action_id = await self.client.send_action(action, params)
+            print(f"执行动作的立刻结果 - success: {action_id}")
+            response = await self.client.get_outcome(action_id)
+            print(f"response: {response}")
+            return response
+        except Exception as e:
+            print(f"💥 perform_action 执行失败: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            self.logger.error(f"❌ 执行动作失败: {e}")
+            return f"执行动作失败: {e}"
+
+    @tool
+    async def available_actions(self) -> list[Dict[str, Any]]:
+        """获取当前可用的动作"""
+        try:
+            print(f"🔍 获取可用动作列表...")
+            result = await self.perform_action("get_action_list", {})
+            print(
+                f"✅ 获取到 {len(result) if isinstance(result, list) else '未知数量'} 个可用动作"
+            )
+            return result
+        except Exception as e:
+            print(f"💥 available_actions 执行失败: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            self.logger.error(f"❌ 获取可用动作失败: {e}")
+            return []
 
     async def _generate_opening_message(self, target: str, topic: str) -> str:
         """根据主题生成开场白"""
@@ -1325,6 +1452,7 @@ async def main():
     except KeyboardInterrupt:
         pass
     except Exception as e:
+        traceback.print_exc()
         print(f"❌ Agent 演示失败: {e}")
         return 1
     finally:
@@ -1350,5 +1478,6 @@ if __name__ == "__main__":
         print("\n👋 Agent 演示已停止")
         sys.exit(0)
     except Exception as e:
+        traceback.print_exc()
         print(f"❌ 程序异常退出: {e}")
         sys.exit(1)

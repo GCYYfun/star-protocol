@@ -106,21 +106,21 @@ class OutcomeMessage:
     """结果消息"""
 
     message_type: MessageType = MessageType.OUTCOME
+    outcome: str = ""  # 对应的动作名称
     action_id: str = ""  # 对应的动作ID
-    status: str = ""  # 执行状态 (success/failure)
-    outcome: Optional[Dict[str, Any]] = None  # 具体结果数据
+    data: Optional[Dict[str, Any]] = None  # 具体结果数据
 
     def __post_init__(self):
-        if self.outcome is None:
-            self.outcome = {}
+        if self.data is None:
+            self.data = {}
 
     def to_dict(self) -> Dict[str, Any]:
 
         return {
             "message_type": self.message_type.value,
-            "action_id": self.action_id,
-            "status": self.status,
             "outcome": self.outcome,
+            "action_id": self.action_id,
+            "data": self.data,
         }
 
     @classmethod
@@ -128,8 +128,8 @@ class OutcomeMessage:
         try:
             return cls(
                 action_id=data["action_id"],
-                status=data["status"],
-                outcome=data.get("outcome", {}),
+                outcome=data["outcome"],
+                data=data.get("data", {}),
             )
         except KeyError as e:
             raise ValidationException(f"Invalid OutcomeMessage format: {e}")
@@ -183,8 +183,6 @@ class StreamMessage:
     def __post_init__(self):
         if self.chunk is None:
             self.chunk = {}
-        if not self.stream_id:
-            self.stream_id = f"strm_{str(uuid.uuid4())}"
 
     def to_dict(self) -> Dict[str, Any]:
         return {

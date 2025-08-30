@@ -7,27 +7,33 @@ import websockets
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 from ..protocol import (
-    Envelope,
     Message,
+    Envelope,
     EnvelopeType,
     MessageType,
     ClientType,
     ClientInfo,
+    ActionMessage,
+    OutcomeMessage,
+    EventMessage,
+    StreamMessage,
 )
-from ..protocol import ActionMessage, OutcomeMessage, EventMessage, StreamMessage
 from ..utils import get_logger
 
+# 上下文管理器
+from .context import ClientContext
 
-@dataclass
-class MessageContext:
-    """消息上下文，包含消息和相关元数据"""
 
-    message: Message
-    sender: Optional[str] = None
-    recipient: Optional[str] = None
-    envelope_type: Optional[EnvelopeType] = None
-    timestamp: Optional[float] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+# @dataclass
+# class MessageContext:
+#     """消息上下文，包含消息和相关元数据"""
+
+#     message: Message
+#     sender: Optional[str] = None
+#     recipient: Optional[str] = None
+#     envelope_type: Optional[EnvelopeType] = None
+#     timestamp: Optional[float] = None
+#     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class BaseClient:
@@ -75,16 +81,13 @@ class BaseClient:
         self.env_id = env_id
         self.metadata = metadata or {}
 
-        # 上下文管理器
-        from .context import ClientContext
-
         self.context = ClientContext(client_id=client_id)
 
         # 用户自定义处理器（通过装饰器注册）
-        self._action_handlers: List[Callable] = []
-        self._outcome_handlers: List[Callable] = []
-        self._event_handlers: List[Callable] = []
-        self._stream_handlers: List[Callable] = []
+        self._action_handlers: Dict[str, Callable] = {}
+        self._outcome_handlers: Dict[str, Callable] = {}
+        self._event_handlers: Dict[str, Callable] = {}
+        self._stream_handlers: Dict[str, Callable] = {}
 
         # 日志器
         self.logger = get_logger("star_protocol.client")
@@ -119,34 +122,18 @@ class BaseClient:
             params = list(sig.parameters.keys())
 
             # 包装函数以支持过滤和上下文传递
-            async def wrapper(ctx: MessageContext):
-                message = ctx.message
-                if action_name is None or message.action == action_name:
-                    if asyncio.iscoroutinefunction(func):
-                        # 根据参数签名决定传递什么
-                        if len(params) == 1:
-                            # 只接受 message 参数（向后兼容）
-                            await func(message)
-                        elif len(params) == 2 and "ctx" in params:
-                            # 接受 message 和 ctx 参数
-                            await func(message, ctx)
-                        else:
-                            # 默认只传递 message
-                            await func(message)
-                    else:
-                        if len(params) == 1:
-                            func(message)
-                        elif len(params) == 2 and "ctx" in params:
-                            func(message, ctx)
-                        else:
-                            func(message)
+            async def wrapper(message: ActionMessage):
+                if asyncio.iscoroutinefunction(func):
+                    return await func(message)
+                else:
+                    return func(message)
 
-            self._action_handlers.append(wrapper)
+            self._action_handlers[action_name] = wrapper
             return func
 
         return decorator
 
-    def outcome(self, action_id: Optional[str] = None):
+    def outcome(self, action_name: Optional[str] = None):
         """OUTCOME 消息处理器装饰器
 
         Args:
@@ -159,14 +146,14 @@ class BaseClient:
         """
 
         def decorator(func: Callable):
-            async def wrapper(message: OutcomeMessage):
-                if action_id is None or message.action_id == action_id:
-                    if asyncio.iscoroutinefunction(func):
-                        await func(message)
-                    else:
-                        func(message)
 
-            self._outcome_handlers.append(wrapper)
+            async def wrapper(message: OutcomeMessage):
+                if asyncio.iscoroutinefunction(func):
+                    return await func(message)
+                else:
+                    return func(message)
+
+            self._outcome_handlers[action_name] = wrapper
             return func
 
         return decorator
@@ -188,14 +175,14 @@ class BaseClient:
         """
 
         def decorator(func: Callable):
-            async def wrapper(message: EventMessage):
-                if event_name is None or message.event == event_name:
-                    if asyncio.iscoroutinefunction(func):
-                        await func(message)
-                    else:
-                        func(message)
 
-            self._event_handlers.append(wrapper)
+            async def wrapper(message: EventMessage):
+                if asyncio.iscoroutinefunction(func):
+                    return await func(message)
+                else:
+                    return func(message)
+
+            self._event_handlers[event_name] = wrapper
             return func
 
         return decorator
@@ -217,14 +204,14 @@ class BaseClient:
         """
 
         def decorator(func: Callable):
-            async def wrapper(message: StreamMessage):
-                if stream_name is None or message.stream == stream_name:
-                    if asyncio.iscoroutinefunction(func):
-                        await func(message)
-                    else:
-                        func(message)
 
-            self._stream_handlers.append(wrapper)
+            async def wrapper(message: StreamMessage):
+                if asyncio.iscoroutinefunction(func):
+                    return await func(message)
+                else:
+                    return func(message)
+
+            self._stream_handlers[stream_name] = wrapper
             return func
 
         return decorator
@@ -265,74 +252,94 @@ class BaseClient:
 
         # 根据消息类型分发到具体处理方法
         if isinstance(message, ActionMessage):
-            await self.on_action(message, envelope)
+            await self.on_action(envelope)
         elif isinstance(message, OutcomeMessage):
             # 处理 outcome 响应，尝试匹配上下文
-            await self._handle_outcome_response(message)
-            await self.on_outcome(message)
+            await self.on_outcome(envelope)
         elif isinstance(message, EventMessage):
             # 处理 event 响应，尝试匹配上下文
-            await self._handle_event_response(message)
-            await self.on_event(message)
+            # await self._handle_event_response(message)
+            await self.on_event(envelope)
         elif isinstance(message, StreamMessage):
-            await self.on_stream(message)
+            await self.on_stream(envelope)
         else:
             self.logger.warning(f"未知消息类型: {type(message)}")
 
-    async def on_action(self, message: ActionMessage, envelope: Envelope) -> None:
+    async def on_action(self, envelope: Envelope) -> None:
         """处理 ACTION 消息事件（默认实现）
 
         Args:
             message: ACTION 消息
             envelope: 消息信封（包含发送者等信息）
         """
+        message = envelope.message
         self.logger.debug(f"收到动作: {message.action} from {envelope.sender}")
-
-        # 创建消息上下文
-        ctx = MessageContext(
-            message=message,
-            sender=envelope.sender,
-            recipient=envelope.recipient,
-            envelope_type=envelope.envelope_type,
-            timestamp=time.time(),
-        )
-
+        action_name = message.action
         # 调用用户注册的处理器
-        for handler in self._action_handlers:
+        if action_name in self._action_handlers:
             try:
-                await handler(ctx)
+                handler = self._action_handlers[action_name]
+                result = await handler(message)
+                self.logger.info(f"Action 执行完毕的结果: {result}")
+                # await self.send_outcome(
+                #     data=result,
+                #     recipient=envelope.sender,
+                #     action=message.action,
+                #     action_id=message.action_id,
+                # )
+                out_msg = OutcomeMessage(
+                    outcome=message.action, action_id=message.action_id, data=result
+                )
+                await self.send_message(
+                    message=out_msg,
+                    recipient=envelope.sender,
+                )
             except Exception as e:
                 self.logger.error(f"ACTION 处理器出错: {e}")
 
-    async def on_outcome(self, message: OutcomeMessage) -> None:
+    async def on_outcome(self, envelope: Envelope) -> None:
         """处理 OUTCOME 消息事件（默认实现）
 
         Args:
-            message: OUTCOME 消息
+            envelope: 消息信封
         """
-        self.logger.debug(f"收到结果: {message.action_id} - {message.status}")
+        message = envelope.message
+        self.logger.debug(f"收到结果: {message.action_id} - {message.data}")
 
-        # 调用用户注册的处理器
-        for handler in self._outcome_handlers:
+        outcome = message.outcome
+
+        if outcome in self._outcome_handlers:
+            # 如果有针对特定 outcome 的处理器，优先调用
             try:
+                handler = self._outcome_handlers[outcome]
                 await handler(message)
             except Exception as e:
                 self.logger.error(f"OUTCOME 处理器出错: {e}")
+        else:  # 如无指定 默认加入 context
+            item = self.context.get_request_context(message.action_id)
+            if item and item.future:
+                item.future.set_result(message.data)
+            else:
+                self.logger.warning(f"未找到对应的上下文项: {message.action_id}")
 
-    async def on_event(self, message: EventMessage) -> None:
+    async def on_event(self, envelope: Envelope) -> None:
         """处理 EVENT 消息事件（默认实现）
 
         Args:
             message: EVENT 消息
         """
+        message = envelope.message
         self.logger.debug(f"收到事件: {message.event}")
 
-        # 调用用户注册的处理器
-        for handler in self._event_handlers:
+        event = message.event
+        if event in self._event_handlers:
             try:
+                handler = self._event_handlers[event]
                 await handler(message)
             except Exception as e:
                 self.logger.error(f"EVENT 处理器出错: {e}")
+        else:  # 不存在
+            self.logger.warning(f"未知事件类型: {event}")
 
     async def on_stream(self, message: StreamMessage) -> None:
         """处理 STREAM 消息事件（默认实现）
@@ -361,7 +368,7 @@ class BaseClient:
             self.connected = True
 
             # 启动上下文管理器
-            await self.context.start()
+            # await self.context.start()
 
             # 发送 connect event 作为第一条消息
             await self._send_connect_event()
@@ -378,7 +385,6 @@ class BaseClient:
 
     async def _send_connect_event(self) -> None:
         """发送连接事件作为第一条消息"""
-        from ..protocol import EventMessage, Envelope, EnvelopeType
 
         # 获取客户端身份信息
         client_info = self._get_client_identity()
@@ -530,28 +536,37 @@ class BaseClient:
     # 上下文响应处理
     # ===========================================
 
-    async def _handle_outcome_response(self, outcome: OutcomeMessage) -> None:
-        """处理 outcome 响应，匹配到对应的 action 上下文
+    # async def _handle_outcome_response(self, envelope: Envelope) -> None:
+    #     """处理 outcome 响应，匹配到对应的 action 上下文
 
-        Args:
-            outcome: outcome 消息
-        """
-        # 尝试从 outcome 中提取对应的 action_id
-        action_id = getattr(outcome, "action_id", None)
-        if not action_id:
-            # 如果没有直接的 action_id，尝试从 data 中提取
-            if hasattr(outcome, "data") and isinstance(outcome.data, dict):
-                action_id = outcome.data.get("action_id") or outcome.data.get(
-                    "request_id"
-                )
+    #     Args:
+    #         envelope: 包含 outcome 消息的信封
+    #     """
+    #     outcome = envelope.message
+    #     # 尝试从 outcome 中提取对应的 action_id
+    #     action_id = getattr(outcome, "action_id", None)
+    #     if not action_id:
+    #         # 如果没有直接的 action_id，尝试从 data 中提取
+    #         if hasattr(outcome, "data") and isinstance(outcome.data, dict):
+    #             action_id = outcome.data.get("action_id") or outcome.data.get(
+    #                 "request_id"
+    #             )
 
-        if action_id:
-            # 尝试完成对应的上下文
-            success = self.context.complete_request(action_id, outcome)
-            if success:
-                self.logger.debug(f"匹配到 action 上下文: {action_id}")
-            else:
-                self.logger.debug(f"未找到匹配的 action 上下文: {action_id}")
+    #     if action_id:
+    #         # 尝试完成对应的上下文
+    #         success = self.context.complete_request(action_id, outcome)
+    #         if success:
+    #             self.logger.debug(f"匹配到 action 上下文: {action_id}")
+    #         else:
+    #             self.logger.debug(f"未找到匹配的 action 上下文: {action_id}")
+
+    #     if action_id:
+    #         # 尝试完成对应的上下文
+    #         success = self.context.complete_request(action_id, outcome)
+    #         if success:
+    #             self.logger.debug(f"匹配到 action 上下文: {action_id}")
+    #         else:
+    #             self.logger.debug(f"未找到匹配的 action 上下文: {action_id}")
 
     async def _handle_event_response(self, event: EventMessage) -> None:
         """处理 event 响应，匹配到对应的上下文
@@ -589,8 +604,7 @@ class BaseClient:
         action: str,
         params: Dict[str, Any],
         recipient: str,
-        timeout: Optional[float] = None,
-        wait_for_outcome: bool = True,
+        timeout: Optional[float] = 600,
     ) -> Any:
         """发送 action 并等待 outcome（带上下文管理）
 
@@ -599,17 +613,15 @@ class BaseClient:
             params: 动作参数
             recipient: 接收者
             timeout: 超时时间
-            wait_for_outcome: 是否等待 outcome
 
         Returns:
-            如果 wait_for_outcome=True，返回 outcome 消息；否则返回 request_id
+            返回 request_id
         """
-        from ..protocol import ActionMessage, Envelope, EnvelopeType
 
         # 创建上下文
         context_item = self.context.create_request_context(
             request_type="action",
-            request_data={"action": action, "params": params, "recipient": recipient},
+            # request_data={"action": action, "params": params, "recipient": recipient},
             timeout=timeout,
         )
 
@@ -633,75 +645,7 @@ class BaseClient:
         await self.send_envelope(envelope)
         self.logger.debug(f"发送 action: {action} (ID: {request_id})")
 
-        if wait_for_outcome:
-            # 等待响应
-            try:
-                outcome = await self.context.wait_for_response(request_id, timeout)
-                return outcome
-            except asyncio.TimeoutError:
-                self.logger.warning(f"Action {action} (ID: {request_id}) 超时")
-                raise
-        else:
-            return request_id
-
-    async def send_event_with_context(
-        self,
-        event: str,
-        data: Dict[str, Any],
-        recipient: str,
-        timeout: Optional[float] = None,
-        wait_for_response: bool = False,
-    ) -> Any:
-        """发送 event（带上下文管理）
-
-        Args:
-            event: 事件名称
-            data: 事件数据
-            recipient: 接收者
-            timeout: 超时时间
-            wait_for_response: 是否等待响应
-
-        Returns:
-            如果 wait_for_response=True，返回响应消息；否则返回 request_id
-        """
-        from ..protocol import EventMessage, Envelope, EnvelopeType
-
-        # 创建上下文（如果需要等待响应）
-        request_id = None
-        if wait_for_response:
-            context_item = self.context.create_request_context(
-                request_type="event",
-                request_data={"event": event, "data": data, "recipient": recipient},
-                timeout=timeout,
-            )
-            request_id = context_item.request_id
-            # 将 request_id 添加到 data 中
-            data = {**data, "request_id": request_id}
-
-        # 创建 event 消息
-        event_message = EventMessage(event=event, data=data)
-
-        # 创建信封并发送
-        envelope = Envelope(
-            envelope_type=EnvelopeType.MESSAGE,
-            sender=self.client_id,
-            recipient=recipient,
-            message=event_message,
-        )
-
-        await self.send_envelope(envelope)
-        self.logger.debug(f"发送 event: {event} (ID: {request_id})")
-
-        if wait_for_response and request_id:
-            # 等待响应
-            try:
-                response = await self.context.wait_for_response(request_id, timeout)
-                return response
-            except asyncio.TimeoutError:
-                self.logger.warning(f"Event {event} (ID: {request_id}) 超时")
-                raise
-        else:
-            return request_id
+        return request_id
 
     def get_context_stats(self) -> Dict[str, Any]:
         """获取上下文统计信息"""

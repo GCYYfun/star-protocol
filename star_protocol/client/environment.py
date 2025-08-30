@@ -39,7 +39,11 @@ class EnvironmentClient(BaseClient):
         }
 
     async def send_outcome(
-        self, action_id: str, status: str, outcome: Dict[str, Any], recipient: str
+        self,
+        action_id: str,
+        outcome: Dict[str, Any],
+        data: Dict[str, Any],
+        recipient: str,
     ) -> None:
         """发送动作结果给 Agent
 
@@ -50,7 +54,7 @@ class EnvironmentClient(BaseClient):
             recipient: 目标 Agent ID
         """
         outcome_message = OutcomeMessage(
-            action_id=action_id, status=status, outcome=outcome
+            action_id=action_id, outcome=outcome, data=data
         )
 
         await self.send_message(outcome_message, recipient)

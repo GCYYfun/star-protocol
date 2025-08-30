@@ -6,7 +6,8 @@ from typing import Optional
 from .manager import ConnectionManager
 from .router import MessageRouter
 from ..protocol import Envelope, EnvelopeType, ClientInfo, ClientType, EventMessage
-from ..utils import get_logger, get_config
+
+from ..utils import get_logger  # , get_config
 
 
 class HubServer:
@@ -34,7 +35,7 @@ class HubServer:
         self._metrics_enabled = False
         self._metrics_collector = None
 
-        self.logger = get_logger("star_protocol.hub.server")
+        self.logger = get_logger("hub.server")
 
     async def start(self) -> None:
         """启动服务器"""

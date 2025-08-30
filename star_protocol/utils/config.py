@@ -162,48 +162,48 @@ class StarConfig:
         return result
 
 
-# 全局配置实例
-_global_config: Optional[StarConfig] = None
+# # 全局配置实例
+# _global_config: Optional[StarConfig] = None
 
 
-def get_config() -> StarConfig:
-    """获取全局配置
+# def get_config() -> StarConfig:
+#     """获取全局配置
 
-    如果配置尚未初始化，则从环境变量创建默认配置。
+#     如果配置尚未初始化，则从环境变量创建默认配置。
 
-    Returns:
-        全局配置实例
-    """
-    global _global_config
-    if _global_config is None:
-        _global_config = StarConfig.from_env()
-    return _global_config
-
-
-def set_config(config: StarConfig) -> None:
-    """设置全局配置
-
-    Args:
-        config: 新的配置实例
-    """
-    global _global_config
-    _global_config = config
+#     Returns:
+#         全局配置实例
+#     """
+#     global _global_config
+#     if _global_config is None:
+#         _global_config = StarConfig.from_env()
+#     return _global_config
 
 
-def update_config(**kwargs) -> None:
-    """更新全局配置
+# def set_config(config: StarConfig) -> None:
+#     """设置全局配置
 
-    Args:
-        **kwargs: 要更新的配置项
-    """
-    config = get_config()
-    config.update(**kwargs)
+#     Args:
+#         config: 新的配置实例
+#     """
+#     global _global_config
+#     _global_config = config
 
 
-def reset_config() -> None:
-    """重置全局配置
+# def update_config(**kwargs) -> None:
+#     """更新全局配置
 
-    清除当前配置，下次调用 get_config() 时会重新从环境变量读取。
-    """
-    global _global_config
-    _global_config = None
+#     Args:
+#         **kwargs: 要更新的配置项
+#     """
+#     config = get_config()
+#     config.update(**kwargs)
+
+
+# def reset_config() -> None:
+#     """重置全局配置
+
+#     清除当前配置，下次调用 get_config() 时会重新从环境变量读取。
+#     """
+#     global _global_config
+#     _global_config = None

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from star_protocol.hub import HubServer
 from star_protocol.monitor import create_simple_monitor
-from star_protocol.utils import setup_logger, get_logger
+from star_protocol.utils import get_logger
 from star_protocol.protocol import ClientType
 from star_protocol.cli import create_hub_cli
 
@@ -47,7 +47,6 @@ class HubServerDemo:
         self.log_level = log_level
 
         # 设置日志
-        setup_logger(level=log_level, enable_rich=True)
         self.logger = get_logger("star_protocol.hub_server_demo")
 
         # 创建监控器
@@ -365,17 +364,6 @@ async def main():
 
     args = parser.parse_args()
 
-    # 检查端口是否被占用
-    import socket
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # 允许地址重用
-            s.bind((args.host, args.port))
-    except OSError as e:
-        print(f"❌ 端口 {args.port} 已被占用，请选择其他端口: {e}")
-        return 1
-
     # 创建并启动 Hub 服务器演示
     demo = HubServerDemo(
         host=args.host,
@@ -409,12 +397,12 @@ if __name__ == "__main__":
             # 如果没有 WindowsProactorEventLoopPolicy，使用默认策略
             pass
 
-    try:
-        exit_code = asyncio.run(main())
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        print("\n👋 Hub 服务器演示已停止")
-        sys.exit(0)
-    except Exception as e:
-        print(f"❌ 程序异常退出: {e}")
-        sys.exit(1)
+        # try:
+    exit_code = asyncio.run(main())
+    #     sys.exit(exit_code)
+    # except KeyboardInterrupt:
+    #     print("\n👋 Hub 服务器演示已停止")
+    #     sys.exit(0)
+    # except Exception as e:
+    #     print(f"❌ 程序异常退出: {e}")
+    #     sys.exit(1)
