@@ -35,7 +35,7 @@ class QAEnvironment(EnvironmentClient):
     
     async def on_message(self, envelope):
         """Environment 接收所有消息的抄送"""
-        payload = envelope.data
+        payload = envelope.payload
         print(f"  🌍 Environment 观察: {envelope.sender} -> {envelope.recipient}, type={payload.type}")
 
 

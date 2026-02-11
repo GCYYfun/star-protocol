@@ -12,11 +12,11 @@ class Envelope(BaseModel):
     """
     协议信封 - 所有消息的外层包装
     
-    type 字段决定 data 的类型：
-    - type="system" -> data 必须是 SystemPayload
-    - type="message" -> data 必须是 MessagePayload  
-    - type="broadcast" -> data 必须是 BroadcastPayload
-    - type="monitor" -> data 必须是 MonitorPayload
+    type 字段决定 payload 的类型：
+    - type="system" -> payload 必须是 SystemPayload
+    - type="message" -> payload 必须是 MessagePayload  
+    - type="broadcast" -> payload 必须是 BroadcastPayload
+    - type="monitor" -> payload 必须是 MonitorPayload
     """
     
     model_config = ConfigDict(
@@ -27,7 +27,7 @@ class Envelope(BaseModel):
                 "type": "message",
                 "sender": "agent_01",
                 "recipient": "env_main",
-                "data": {
+                "payload": {
                     "type": "action",
                     "content": {
                         "name": "move",
@@ -50,7 +50,7 @@ class Envelope(BaseModel):
     )
     
     type: Literal["system", "message", "broadcast", "monitor"] = Field(
-        description="消息类型，决定 data 的结构"
+        description="消息类型，决定 payload 的结构"
     )
     
     sender: str = Field(
@@ -61,14 +61,14 @@ class Envelope(BaseModel):
         description="接收者 ID 或特殊目标 ('hub', '@all', '@env')"
     )
     
-    data: Union[SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload] = Field(
+    payload: Union[SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload] = Field(
         description="业务载荷，类型取决于 Envelope.type"
     )
     
-    @field_validator('data', mode='before')
+    @field_validator('payload', mode='before')
     @classmethod
-    def validate_data_type(cls, v, info):
-        """验证 data 类型与 envelope type 匹配"""
+    def validate_payload_type(cls, v, info):
+        """验证 payload 类型与 envelope type 匹配"""
         if info.data.get('type') == 'system' and not isinstance(v, (dict, SystemPayload)):
             raise ValueError("system type requires SystemPayload")
         elif info.data.get('type') == 'message' and not isinstance(v, (dict, MessagePayload)):

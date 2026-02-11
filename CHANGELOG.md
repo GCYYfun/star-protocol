@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-02-11
+
+### Changed
+- **[破坏性变更]** 将 Envelope 的 `data` 字段重命名为 `payload`，以提高语义准确性并与协议术语保持一致
+- 协议版本从 v1.6 升级到 v1.7
+- 所有客户端、服务端和示例代码已更新以使用新的 `payload` 字段
+
+### Migration Guide
+如果您正在使用旧版本的 SDK，需要进行以下更改：
+```python
+# 旧代码
+envelope.data  # ❌
+
+# 新代码
+envelope.payload  # ✅
+```
+
+## [0.1.0] - 2024-XX-XX
+
 ### Added
 - Monitor 功能完整实现
   - `MonitorClient` 客户端，支持订阅和接收监控数据
@@ -45,5 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 自动重连功能
 - 基础文档和示例
 
-[Unreleased]: https://github.com/your-org/star-protocol-python/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/your-org/star-protocol-python/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/your-org/star-protocol-python/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/your-org/star-protocol-python/releases/tag/v0.1.0

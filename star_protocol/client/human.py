@@ -100,7 +100,7 @@ class HumanClient(BaseClient):
     
     async def on_message(self, envelope: Envelope) -> None:
         """处理业务消息"""
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == "outcome":
             await self.on_outcome(envelope.sender, payload.content)
@@ -111,7 +111,7 @@ class HumanClient(BaseClient):
     
     async def on_broadcast(self, envelope: Envelope) -> None:
         """处理广播消息"""
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == "event":
             await self.on_broadcast_event(envelope.sender, payload.content)

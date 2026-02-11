@@ -4,11 +4,11 @@
 
 | 属性 | 描述 |
 | --- | --- |
-| **版本** | v1.6 |
+| **版本** | v1.7 |
 | **状态** | Draft |
 | **协议层级** | Application Layer (Over WebSocket) |
 | **传输格式** | JSON |
-| **最后更新** | 2026-02-06 |
+| **最后更新** | 2026-02-11 |
 
 ---
 
@@ -45,6 +45,24 @@ graph TD
 
     style Hub fill:#f9f,stroke:#333,stroke-width:2px
 ```
+or
+```
+┌─────────────────┐          ┌─────────────────┐          ┌──────────────────┐
+│   Agent Client  │          │    Hub Server   │          │Environment Client│
+│ (Intelligent)   │  ◄────►  │   (Router)      │  ◄────►  │ (World Logic)    │
+└─────────────────┘          └─────────────────┘          └──────────────────┘
+                                      ▲                             
+                                      │ WebSocket
+                                      │
+                                      │
+                                      │
+                                      ▼
+                            ┌───────────────────┐         
+                            │    Human Client   │
+                            │(Observer & Player)│
+                            └───────────────────┘
+
+```
 
 ## 3. 连接与生命周期
 
@@ -77,9 +95,21 @@ graph TD
 
 Star Protocol 采用双层结构：**Envelope (路由层)** + **Payload (业务层)**。
 
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Envelope                            │
+│  负责消息路由、寻址、验证                                       │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                      Payload                        │    │
+│  │  负责具体业务逻辑、动作处理、状态同步                     │    │
+│  │                                                     │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ### 4.1 Layer 1: Envelope (路由层)
 
-Envelope 是所有数据包的通用外壳，其 `type` 字段充当鉴别器 (Discriminator)，决定 `data` 的结构。
+Envelope 是所有数据包的通用外壳，其 `type` 字段充当鉴别器 (Discriminator)，决定 `payload` 的结构。
 
 ```typescript
 interface Envelope {
@@ -99,7 +129,7 @@ interface Envelope {
   recipient: string;
 
   /** 业务载荷，类型取决于 Envelope.type */
-  data: SystemPayload | MessagePayload | BroadcastPayload;
+  payload: SystemPayload | MessagePayload | BroadcastPayload;
 }
 
 ```
@@ -207,7 +237,7 @@ enum BroadcastType {
   "type": "system",
   "sender": "agent_01",
   "recipient": "hub",
-  "data": {
+  "payload": {
     "type": "ctrl",
     "content": {
       "op": "join",
@@ -227,7 +257,7 @@ enum BroadcastType {
   "type": "message",
   "sender": "agent_01",
   "recipient": "env_main",
-  "data": {
+  "payload": {
     "type": "action",
     "content": {
       "name": "move",
@@ -248,7 +278,7 @@ enum BroadcastType {
   "type": "broadcast",
   "sender": "env_main",
   "recipient": "@all",
-  "data": {
+  "payload": {
     "type": "event",
     "content": {
       "name": "night_fall",
@@ -272,7 +302,7 @@ enum BroadcastType {
   "type": "system",
   "sender": "hub",
   "recipient": "agent_01",
-  "data": {
+  "payload": {
     "type": "error",
     "content": {
       "code": 404,
@@ -315,7 +345,7 @@ Client 向 Hub 发送启用监控请求：
   "type": "monitor",
   "sender": "agent_01",
   "recipient": "hub",
-  "data": {
+  "payload": {
     "type": "ctrl",
     "content": {
       "op": "enable",
@@ -342,7 +372,7 @@ Monitor 向 Hub 订阅特定 Client 的监控数据：
   "type": "monitor",
   "sender": "monitor_01",
   "recipient": "hub",
-  "data": {
+  "payload": {
     "type": "ctrl",
     "content": {
       "op": "subscribe",
@@ -363,7 +393,7 @@ Client 发送监控数据到 Hub：
   "type": "monitor",
   "sender": "agent_01",
   "recipient": "hub",
-  "data": {
+  "payload": {
     "type": "data",
     "content": {
       "data_type": "state_change",
@@ -389,7 +419,7 @@ Hub 转发监控数据给订阅的 Monitor（保持原始 sender）：
   "type": "monitor",
   "sender": "agent_01",
   "recipient": "monitor_01",
-  "data": {
+  "payload": {
     "type": "data",
     "content": {
       "data_type": "state_change",
@@ -420,23 +450,23 @@ Hub 转发监控数据给订阅的 Monitor（保持原始 sender）：
 
 ```
 1. Agent 启用监控
-   Agent → Hub: {type: "monitor", sender: "agent_01", data: {type: "ctrl", content: {op: "enable"}}}
-   Hub → Agent: {type: "monitor", sender: "hub", data: {type: "notify", content: {event: "monitoring_enabled"}}}
+   Agent → Hub: {type: "monitor", sender: "agent_01", payload: {type: "ctrl", content: {op: "enable"}}}
+   Hub → Agent: {type: "monitor", sender: "hub", payload: {type: "notify", content: {event: "monitoring_enabled"}}}
 
 2. Monitor 订阅 Agent
-   Monitor → Hub: {type: "monitor", sender: "monitor_01", data: {type: "ctrl", content: {op: "subscribe", target: "agent_01"}}}
-   Hub → Monitor: {type: "monitor", sender: "hub", data: {type: "notify", content: {event: "subscribed"}}}
+   Monitor → Hub: {type: "monitor", sender: "monitor_01", payload: {type: "ctrl", content: {op: "subscribe", target: "agent_01"}}}
+   Hub → Monitor: {type: "monitor", sender: "hub", payload: {type: "notify", content: {event: "subscribed"}}}
 
 3. Agent 加入环境（触发监控数据）
-   Agent → Hub: {type: "system", sender: "agent_01", data: {type: "ctrl", content: {op: "join"}}}
-   Agent → Hub: {type: "monitor", sender: "agent_01", data: {type: "data", content: {data_type: "state_change", ...}}}
-   Hub → Monitor: {type: "monitor", sender: "agent_01", data: {type: "data", content: {data_type: "state_change", ...}}}
+   Agent → Hub: {type: "system", sender: "agent_01", payload: {type: "ctrl", content: {op: "join"}}}
+   Agent → Hub: {type: "monitor", sender: "agent_01", payload: {type: "data", content: {data_type: "state_change", ...}}}
+   Hub → Monitor: {type: "monitor", sender: "agent_01", payload: {type: "data", content: {data_type: "state_change", ...}}}
                                       ↑ 保持原始 sender
 
 4. Agent 发送消息（触发监控数据）
    Agent → Env: {type: "message", sender: "agent_01", ...}
-   Agent → Hub: {type: "monitor", sender: "agent_01", data: {type: "data", content: {data_type: "message_sent", ...}}}
-   Hub → Monitor: {type: "monitor", sender: "agent_01", data: {type: "data", content: {data_type: "message_sent", ...}}}
+   Agent → Hub: {type: "monitor", sender: "agent_01", payload: {type: "data", content: {data_type: "message_sent", ...}}}
+   Hub → Monitor: {type: "monitor", sender: "agent_01", payload: {type: "data", content: {data_type: "message_sent", ...}}}
                                       ↑ 保持原始 sender
 ```
 
@@ -449,5 +479,6 @@ Hub 转发监控数据给订阅的 Monitor（保持原始 sender）：
 
 ## 8. 版本历史
 
+- **v1.7** (2026-02-11): **[破坏性变更]** 将 Envelope 的 `data` 字段重命名为 `payload`，以提高语义准确性
 - **v1.6** (2026-02-06): 新增 Monitor 功能，通过 Hub 转发监控数据
 - **v1.5** (2026-01-31): 初始版本，定义核心协议

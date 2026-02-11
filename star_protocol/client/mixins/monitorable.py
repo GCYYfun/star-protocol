@@ -156,7 +156,7 @@ class MonitorableMixin:
             {
                 "envelope_type": envelope.type,
                 "recipient": envelope.recipient,
-                "payload_type": envelope.data.type if hasattr(envelope.data, 'type') else None
+                "payload_type": envelope.payload.type if hasattr(envelope.payload, 'type') else None
             }
         )
     
@@ -171,7 +171,7 @@ class MonitorableMixin:
             {
                 "envelope_type": envelope.type,
                 "sender": envelope.sender,
-                "payload_type": envelope.data.type if hasattr(envelope.data, 'type') else None
+                "payload_type": envelope.payload.type if hasattr(envelope.payload, 'type') else None
             }
         )
     
@@ -193,7 +193,7 @@ class MonitorableMixin:
         Args:
             envelope: 消息信封
         """
-        payload = envelope.data
+        payload = envelope.payload
         
         # 根据 MonitorType 分发
         if payload.type == MonitorType.NOTIFY:

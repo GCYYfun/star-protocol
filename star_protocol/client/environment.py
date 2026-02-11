@@ -129,7 +129,7 @@ class EnvironmentClient(BaseClient):
     
     async def on_message(self, envelope: Envelope) -> None:
         """处理业务消息"""
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == "action":
             await self.on_action(envelope.sender, payload.content)

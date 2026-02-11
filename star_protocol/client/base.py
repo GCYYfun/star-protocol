@@ -313,7 +313,7 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
     
     async def _handle_system(self, envelope: Envelope) -> None:
         """处理系统消息"""
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == "error":
             await self.on_error(payload.content)

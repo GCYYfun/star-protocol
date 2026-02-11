@@ -137,7 +137,7 @@ class MessageRouter:
         Args:
             envelope: 消息信封
         """
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == "ctrl":
             op = payload.content.get("op")
@@ -368,7 +368,7 @@ class MessageRouter:
             envelope: 消息信封
         """
         
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == MonitorType.CTRL:
             # 处理控制命令

@@ -45,7 +45,7 @@ def test_envelope_with_system_payload():
         type="system",
         sender="agent_01",
         recipient="hub",
-        data=SystemPayload(
+        payload=SystemPayload(
             type="ctrl",
             content={"op": "join", "env_id": "room_1"}
         )
@@ -54,7 +54,7 @@ def test_envelope_with_system_payload():
     assert envelope.type == "system"
     assert envelope.sender == "agent_01"
     assert envelope.recipient == "hub"
-    assert envelope.data.type == "ctrl"
+    assert envelope.payload.type == "ctrl"
     assert envelope.id  # UUID 自动生成
     assert envelope.timestamp > 0  # 时间戳自动生成
 
@@ -65,14 +65,14 @@ def test_envelope_with_message_payload():
         type="message",
         sender="agent_01",
         recipient="env_main",
-        data=MessagePayload(
+        payload=MessagePayload(
             type="action",
             content={"name": "move", "x": 10, "y": 5}
         )
     )
     
     assert envelope.type == "message"
-    assert envelope.data.type == "action"
+    assert envelope.payload.type == "action"
 
 
 def test_envelope_with_broadcast_payload():
@@ -81,7 +81,7 @@ def test_envelope_with_broadcast_payload():
         type="broadcast",
         sender="env_main",
         recipient="@all",
-        data=BroadcastPayload(
+        payload=BroadcastPayload(
             type="event",
             content={"name": "time_tick"}
         )
@@ -97,7 +97,7 @@ def test_envelope_json_serialization():
         type="message",
         sender="agent_01",
         recipient="env_main",
-        data=MessagePayload(
+        payload=MessagePayload(
             type="action",
             content={"name": "move", "x": 10, "y": 5}
         )
@@ -111,7 +111,7 @@ def test_envelope_json_serialization():
     # 反序列化
     envelope_2 = Envelope.model_validate_json(json_str)
     assert envelope_2.sender == envelope.sender
-    assert envelope_2.data.type == envelope.data.type
+    assert envelope_2.payload.type == envelope.payload.type
 
 
 def test_envelope_dict_conversion():
@@ -120,7 +120,7 @@ def test_envelope_dict_conversion():
         type="system",
         sender="hub",
         recipient="agent_01",
-        data=SystemPayload(
+        payload=SystemPayload(
             type="notify",
             content={"message": "Connected"}
         )
@@ -129,7 +129,7 @@ def test_envelope_dict_conversion():
     # 转为字典
     data = envelope.model_dump()
     assert data["type"] == "system"
-    assert data["data"]["type"] == "notify"
+    assert data["payload"]["type"] == "notify"
     
     # 从字典创建
     envelope_2 = Envelope.model_validate(data)
@@ -163,18 +163,18 @@ def test_envelope_discriminator():
         "type": "system",
         "sender": "hub",
         "recipient": "agent_01",
-        "data": {
+        "payload": {
             "type": "notify",
             "content": {"message": "test"}
         }
     }
     
     envelope = Envelope.model_validate(envelope_dict)
-    assert isinstance(envelope.data, SystemPayload)
+    assert isinstance(envelope.payload, SystemPayload)
     
     # message 类型必须配 MessagePayload
     envelope_dict["type"] = "message"
-    envelope_dict["data"]["type"] = "action"
+    envelope_dict["payload"]["type"] = "action"
     
     envelope = Envelope.model_validate(envelope_dict)
-    assert isinstance(envelope.data, MessagePayload)
+    assert isinstance(envelope.payload, MessagePayload)

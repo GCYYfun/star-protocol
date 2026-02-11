@@ -165,7 +165,7 @@ class MonitorClient(BaseClient):
         Args:
             envelope: 消息信封
         """
-        payload = envelope.data
+        payload = envelope.payload
         
         if payload.type == MonitorType.NOTIFY:
             # 处理通知
