@@ -193,7 +193,7 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
             type="system",
             sender=self.client_id,
             recipient="hub",
-            data=SystemPayload(
+            payload=SystemPayload(
                 type="ctrl",
                 content={"op": "join", "env_id": env_id}
             )
@@ -225,7 +225,7 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
             type="system",
             sender=self.client_id,
             recipient="hub",
-            data=SystemPayload(
+            payload=SystemPayload(
                 type="ctrl",
                 content={"op": "leave"}
             )

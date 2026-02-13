@@ -45,7 +45,7 @@ async def main():
     
     # 连接到 Hub
     print("连接到 Hub...")
-    await agent.connect("ws://localhost:8765")
+    await agent.connect("ws://localhost:8000")
     print("✅ 已连接\n")
     
     # 启动 Agent（开始接收消息）

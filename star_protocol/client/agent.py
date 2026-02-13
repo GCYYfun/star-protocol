@@ -64,7 +64,7 @@ class AgentClient(BaseClient):
             type="message",
             sender=self.client_id,
             recipient=recipient,
-            data=MessagePayload(
+            payload=MessagePayload(
                 type="action",
                 content=content
             )
@@ -89,7 +89,7 @@ class AgentClient(BaseClient):
             type="message",
             sender=self.client_id,
             recipient=recipient,
-            data=MessagePayload(
+            payload=MessagePayload(
                 type="outcome",
                 content=content
             )

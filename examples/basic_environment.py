@@ -70,13 +70,13 @@ class MyEnvironment(EnvironmentClient):
         await self.send_outcome(recipient=sender, content=result)
         
         # 广播事件
-        await self.broadcast_event(
-            event_type="action_processed",
-            content={
-                "agent": sender,
-                "action": action_name
-            }
-        )
+        # await self.broadcast_event(
+        #     event_name="action_processed",
+        #     content={
+        #         "agent": sender,
+        #         "action": action_name
+        #     }
+        # )
 
 
 async def main():
@@ -90,7 +90,7 @@ async def main():
     
     # 连接到 Hub
     print("连接到 Hub...")
-    await env.connect("ws://localhost:8765")
+    await env.connect("ws://localhost:8000")
     print("✅ 已连接\n")
     
     # 启动 Environment（开始接收消息）

@@ -58,7 +58,7 @@ class EnvironmentClient(BaseClient):
             type="message",
             sender=self.client_id,
             recipient=recipient,
-            data=MessagePayload(
+            payload=MessagePayload(
                 type="outcome",
                 content=content
             )
@@ -87,7 +87,7 @@ class EnvironmentClient(BaseClient):
             type="broadcast",
             sender=self.client_id,
             recipient="@all",
-            data=BroadcastPayload(
+            payload=BroadcastPayload(
                 type="event",
                 content=event_content
             )
@@ -118,7 +118,7 @@ class EnvironmentClient(BaseClient):
             type="broadcast",
             sender=self.client_id,
             recipient=f"@env:{env_id}",
-            data=BroadcastPayload(
+            payload=BroadcastPayload(
                 type="event",
                 content=event_content
             )

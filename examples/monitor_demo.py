@@ -58,7 +58,7 @@ class GameEnvironment(EnvironmentClient):
             
             # 广播事件给所有玩家
             await self.broadcast_event(
-                event_type="player_moved",
+                event_name="player_moved",
                 content={
                     "player": sender,
                     "position": [x, y]
