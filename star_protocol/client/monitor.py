@@ -118,7 +118,7 @@ class MonitorClient(BaseClient):
             type=EnvelopeType.MONITOR,
             sender=self.client_id,
             recipient="hub",
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.CTRL,
                 content={
                     "op": "subscribe",
@@ -146,7 +146,7 @@ class MonitorClient(BaseClient):
             type=EnvelopeType.MONITOR,
             sender=self.client_id,
             recipient="hub",
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.CTRL,
                 content={
                     "op": "unsubscribe",

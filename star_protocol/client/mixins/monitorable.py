@@ -68,7 +68,7 @@ class MonitorableMixin:
             type=EnvelopeType.MONITOR,
             sender=self.client_id,
             recipient="hub",
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.CTRL,
                 content={
                     "op": "enable",
@@ -89,7 +89,7 @@ class MonitorableMixin:
             type=EnvelopeType.MONITOR,
             sender=self.client_id,
             recipient="hub",
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.CTRL,
                 content={"op": "disable"}
             )
@@ -122,7 +122,7 @@ class MonitorableMixin:
             type=EnvelopeType.MONITOR,
             sender=self.client_id,
             recipient="hub",
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.DATA,
                 content={
                     "data_type": data_type,
