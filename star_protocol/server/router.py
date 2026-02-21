@@ -326,7 +326,7 @@ class MessageRouter:
             type="system",
             sender="hub",
             recipient=client_id,
-            data=SystemPayload(type=msg_type, content=content)
+            payload=SystemPayload(type=msg_type, content=content)
         )
         
         try:
@@ -385,7 +385,7 @@ class MessageRouter:
                         type=EnvelopeType.MONITOR,
                         sender="hub",
                         recipient=envelope.sender,
-                        data=MonitorPayload(
+                        payload=MonitorPayload(
                             type=MonitorType.NOTIFY,
                             content={
                                 "event": "monitoring_enabled",
@@ -403,7 +403,7 @@ class MessageRouter:
                         type=EnvelopeType.MONITOR,
                         sender="hub",
                         recipient=envelope.sender,
-                        data=MonitorPayload(
+                        payload=MonitorPayload(
                             type=MonitorType.NOTIFY,
                             content={"event": "monitoring_disabled"}
                         )
@@ -420,7 +420,7 @@ class MessageRouter:
                             type=EnvelopeType.MONITOR,
                             sender="hub",
                             recipient=envelope.sender,
-                            data=MonitorPayload(
+                            payload=MonitorPayload(
                                 type=MonitorType.NOTIFY,
                                 content={
                                     "event": "subscribed",
@@ -440,7 +440,7 @@ class MessageRouter:
                             type=EnvelopeType.MONITOR,
                             sender="hub",
                             recipient=envelope.sender,
-                            data=MonitorPayload(
+                            payload=MonitorPayload(
                                 type=MonitorType.NOTIFY,
                                 content={
                                     "event": "unsubscribed",
@@ -460,7 +460,7 @@ class MessageRouter:
             await self.connection_manager.forward_monitor_data(
                 client_id=envelope.sender,
                 data_type=payload.content.get("data_type"),
-                data=payload.content.get("data")
+                payload=payload.content.get("data")
             )
     
     def get_uptime(self) -> float:

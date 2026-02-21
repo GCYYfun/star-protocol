@@ -63,7 +63,7 @@ class MessagingManager:
             type="system",
             sender=client_id,
             recipient=recipient,
-            data=SystemPayload(type=msg_type, content=content)
+            payload=SystemPayload(type=msg_type, content=content)
         )
         await self.send_envelope(envelope)
     

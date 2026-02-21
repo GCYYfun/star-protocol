@@ -59,7 +59,7 @@ class MonitorManager:
                 type=EnvelopeType.MONITOR,
                 sender="hub",
                 recipient=sender,
-                data=MonitorPayload(
+                payload=MonitorPayload(
                     type=MonitorType.NOTIFY,
                     content={
                         "event": "monitoring_enabled",
@@ -78,7 +78,7 @@ class MonitorManager:
                 type=EnvelopeType.MONITOR,
                 sender="hub",
                 recipient=sender,
-                data=MonitorPayload(
+                payload=MonitorPayload(
                     type=MonitorType.NOTIFY,
                     content={"event": "monitoring_disabled"}
                 )
@@ -99,7 +99,7 @@ class MonitorManager:
                 type=EnvelopeType.MONITOR,
                 sender="hub",
                 recipient=sender,
-                data=MonitorPayload(
+                payload=MonitorPayload(
                     type=MonitorType.NOTIFY,
                     content={
                         "event": "subscribed",
@@ -123,7 +123,7 @@ class MonitorManager:
                 type=EnvelopeType.MONITOR,
                 sender="hub",
                 recipient=sender,
-                data=MonitorPayload(
+                payload=MonitorPayload(
                     type=MonitorType.NOTIFY,
                     content={
                         "event": "unsubscribed",
@@ -161,7 +161,7 @@ class MonitorManager:
             type=EnvelopeType.MONITOR,
             sender=client_id,  # 保持原始 Client ID
             recipient="",      # 稍后填充
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.DATA,
                 content={
                     "data_type": data_type,

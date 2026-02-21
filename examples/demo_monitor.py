@@ -63,7 +63,7 @@ class DemoMonitor(MonitorClient):
 
 async def main():
     hub_url = "ws://localhost:8000"
-    target_client_id = "demo_agent"  # 要监控的 ID
+    target_client_id = "auto"  # 要监控的 ID
     
     console.print(f"[bold]启动 Monitor Client...[/bold]")
     console.print(f"目标 Hub: {hub_url}")

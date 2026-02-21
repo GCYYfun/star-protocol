@@ -2,7 +2,7 @@
 
 import time
 import uuid
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from .payloads import SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload
@@ -50,18 +50,22 @@ class Envelope(BaseModel):
     )
     
     type: Literal["system", "message", "broadcast", "monitor"] = Field(
+        default="message",
         description="消息类型，决定 payload 的结构"
     )
     
     sender: str = Field(
+        default="",
         description="发送者 ID"
     )
     
     recipient: str = Field(
+        default="",
         description="接收者 ID 或特殊目标 ('hub', '@all', '@env')"
     )
     
-    payload: Union[SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload] = Field(
+    payload: Optional[Union[SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload]] = Field(
+        default=None,
         description="业务载荷，类型取决于 Envelope.type"
     )
     

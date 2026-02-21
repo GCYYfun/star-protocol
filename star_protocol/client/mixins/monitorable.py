@@ -97,8 +97,34 @@ class MonitorableMixin:
         
         self._monitor_enabled = False
         self.logger.info("Monitoring disabled")
-    
-    async def _broadcast_monitor_data(
+
+    async def send_monitor_data(
+        self,
+        data_type: str,
+        data: Dict[str, Any],
+    ) -> None:
+        """
+        应用层主动推送内部遥测事件到 Monitor。
+
+        与 `_send_monitor_data` 的区别：
+        - 这是公开 API，供应用层（如 Agent 内部执行节点）调用
+        - `_send_monitor_data` 是协议层内部的自动钩子，由 SDK 调用
+        - 两者底层机制相同，均通过 Hub 转发给订阅的 Monitor
+        - 发送的是 MONITOR 类型信封，不会被 `_on_message_sent` 二次处理
+
+        Args:
+            data_type: 事件类型，建议用命名空间前缀，如 "agent:llm_response"
+            data: 事件数据字典
+
+        Example:
+            await session.send_monitor_data("agent:llm_response", {"text": reply})
+            await session.send_monitor_data("agent:tool_call", {"tool": "move", "args": {...}})
+        """
+        if not self._monitor_enabled:
+            return
+        await self._send_monitor_data(data_type, data)
+
+    async def _send_monitor_data(
         self,
         data_type: str,
         data: Dict[str, Any]
@@ -136,7 +162,7 @@ class MonitorableMixin:
     
     async def _on_state_change(self, old_state: str, new_state: str, **kwargs) -> None:
         """状态变化时的回调（子类可重写）"""
-        await self._broadcast_monitor_data(
+        await self._send_monitor_data(
             "state_change",
             {
                 "old_state": old_state,
@@ -151,12 +177,13 @@ class MonitorableMixin:
         if envelope.type == EnvelopeType.MONITOR:
             return
         
-        await self._broadcast_monitor_data(
+        await self._send_monitor_data(
             "message_sent",
             {
                 "envelope_type": envelope.type,
                 "recipient": envelope.recipient,
-                "payload_type": envelope.payload.type if hasattr(envelope.payload, 'type') else None
+                "payload_type": envelope.payload.type if hasattr(envelope.payload, 'type') else None,
+                "content": envelope.payload.content if hasattr(envelope.payload, 'content') else None
             }
         )
     
@@ -166,25 +193,27 @@ class MonitorableMixin:
         if envelope.type == EnvelopeType.MONITOR:
             return
         
-        await self._broadcast_monitor_data(
+        await self._send_monitor_data(
             "message_received",
             {
                 "envelope_type": envelope.type,
                 "sender": envelope.sender,
-                "payload_type": envelope.payload.type if hasattr(envelope.payload, 'type') else None
+                "payload_type": envelope.payload.type if hasattr(envelope.payload, 'type') else None,
+                "content": envelope.payload.content if hasattr(envelope.payload, 'content') else None
             }
         )
     
-    async def _on_error(self, code: int, message: str, **kwargs) -> None:
+    async def _on_error(self, error: dict, **kwargs) -> None:
         """错误发生时的回调（子类可重写）"""
-        await self._broadcast_monitor_data(
+        await self._send_monitor_data(
             "error",
             {
-                "code": code,
-                "message": message,
-                **kwargs
-            }
+                "code": error.get("code", 500),
+                "message": error.get("msg", str(error)),
+                **kwargs,
+            },
         )
+
     
     async def _handle_monitor(self, envelope: Envelope) -> None:
         """

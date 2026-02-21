@@ -58,7 +58,7 @@ class HumanClient(BaseClient):
             type="message",
             sender=self.client_id,
             recipient=recipient,
-            data=MessagePayload(
+            payload=MessagePayload(
                 type="event",
                 content=content
             )
@@ -89,7 +89,7 @@ class HumanClient(BaseClient):
             type="message",
             sender=self.client_id,
             recipient=recipient,
-            data=MessagePayload(
+            payload=MessagePayload(
                 type="action",
                 content=content
             )

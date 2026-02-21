@@ -486,7 +486,7 @@ class SessionManager:
             type=EnvelopeType.MONITOR,
             sender=client_id,  # 保持原始客户端 ID
             recipient="",      # 稍后填充
-            data=MonitorPayload(
+            payload=MonitorPayload(
                 type=MonitorType.DATA,
                 content={
                     "data_type": data_type,
