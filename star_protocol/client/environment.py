@@ -79,9 +79,7 @@ class EnvironmentClient(BaseClient):
             event_name: 事件名称
             content: 事件内容
         """
-        event_content = {"name": event_name}
-        if content:
-            event_content.update(content)
+        event_content = {"name": event_name, "data": content or {}}
         
         envelope = Envelope(
             type="broadcast",
@@ -110,9 +108,7 @@ class EnvironmentClient(BaseClient):
             event_name: 事件名称
             content: 事件内容
         """
-        event_content = {"name": event_name}
-        if content:
-            event_content.update(content)
+        event_content = {"name": event_name, "data": content or {}}
         
         envelope = Envelope(
             type="broadcast",

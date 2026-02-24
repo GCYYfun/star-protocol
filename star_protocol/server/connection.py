@@ -5,7 +5,13 @@ from typing import Dict, Set, Optional, List
 from enum import Enum
 import time
 from fastapi import WebSocket
+        
+# 导入必要的模型
+from star_protocol.models import Envelope, EnvelopeType, MonitorPayload, MonitorType
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SessionState(str, Enum):
     """会话状态"""
@@ -19,7 +25,8 @@ class ClientRole(str, Enum):
     AGENT = "agent"
     ENVIRONMENT = "environment"
     HUMAN = "human"
-    MONITOR = "monitor"  # 新增：监控客户端
+    MONITOR = "monitor"              # 业务监控（接收 monitor 协议消息）
+    HUB_MONITOR = "hub_monitor"      # 系统监控（监听所有消息）
 
 
 @dataclass
@@ -32,6 +39,8 @@ class Session:
     current_env: Optional[str] = None
     connected_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
+    message_count: int = 0  # 消息计数
+    metadata: dict = field(default_factory=dict)  # 元数据（IP、User-Agent等）
     
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -41,7 +50,10 @@ class Session:
             "state": self.state.value,
             "current_env": self.current_env,
             "connected_at": self.connected_at,
-            "uptime": time.time() - self.connected_at
+            "uptime": time.time() - self.connected_at,
+            "last_heartbeat": self.last_heartbeat,
+            "message_count": self.message_count,
+            "metadata": self.metadata
         }
 
 
@@ -51,7 +63,7 @@ class SessionManager:
     
     职责：
     1. 管理所有客户端会话（Session）
-    2. 按角色分类管理（agent/environment/human）
+    2. 按角色分类管理（agent/environment/human/monitor）
     3. 管理环境和成员关系
     4. 提供查询和统计功能
     """
@@ -67,7 +79,8 @@ class SessionManager:
             ClientRole.AGENT: set(),
             ClientRole.ENVIRONMENT: set(),
             ClientRole.HUMAN: set(),
-            ClientRole.MONITOR: set(),  # 新增
+            ClientRole.MONITOR: set(),
+            ClientRole.HUB_MONITOR: set(),
         }
         
         # 环境管理：env_id -> set of client_ids (members)
@@ -75,16 +88,12 @@ class SessionManager:
         
         # 反向索引：client_id -> env_id
         self._client_to_env: Dict[str, str] = {}
-        
+
         # Monitor 功能：哪些 Client 启用了监控
         self._monitored_clients: Dict[str, str] = {}  # {client_id: level}
         
         # Monitor 功能：订阅关系
         self._subscriptions: Dict[str, Set[str]] = {}  # {client_id: {monitor_ids}}
-        
-        # 日志
-        import logging
-        self.logger = logging.getLogger(__name__)
     
     # ==================== 会话管理 ====================
     
@@ -159,7 +168,6 @@ class SessionManager:
             self._cleanup_monitor(client_id)
         else:
             self._cleanup_monitored_client(client_id)
-        
         # 关闭 WebSocket
         try:
             await session.websocket.close()
@@ -330,7 +338,7 @@ class SessionManager:
         """获取所有环境 ID"""
         return list(self._environments.keys())
     
-    def get_environment_details(self) -> List[dict]:
+    def get_environments_info(self) -> List[dict]:
         """获取所有环境详情"""
         return [
             {
@@ -341,6 +349,38 @@ class SessionManager:
             for env_id, members in self._environments.items()
         ]
     
+    def get_environment_info(self, env_id: str) -> Optional[dict]:
+        """获取单个环境的详细信息"""
+        if env_id not in self._environments:
+            return None
+        
+        members = self._environments[env_id]
+        member_details = []
+        
+        for member_id in members:
+            session = self._sessions.get(member_id)
+            if session:
+                member_details.append({
+                    "client_id": session.client_id,
+                    "role": session.role.value,
+                    "state": session.state.value,
+                    "joined_at": session.connected_at,
+                    "message_count": session.message_count
+                })
+        
+        # 获取环境创建时间（Environment 客户端的连接时间）
+        env_session = self._sessions.get(env_id)
+        created_at = env_session.connected_at if env_session else time.time()
+        
+        return {
+            "env_id": env_id,
+            "state": "active",
+            "member_count": len(members),
+            "members": member_details,
+            "created_at": created_at,
+            "uptime": time.time() - created_at
+        }
+    
     def get_statistics(self) -> dict:
         """获取统计信息"""
         return {
@@ -350,17 +390,15 @@ class SessionManager:
                 "environments": len(self._by_role[ClientRole.ENVIRONMENT]),
                 "humans": len(self._by_role[ClientRole.HUMAN]),
                 "monitors": len(self._by_role[ClientRole.MONITOR]),
+                "hub_monitors": len(self._by_role[ClientRole.HUB_MONITOR]),
             },
             "environments": {
                 "total": len(self._environments),
-                "details": self.get_environment_details()
-            },
-            "monitoring": {
-                "monitored_clients": len(self._monitored_clients),
-                "active_subscriptions": sum(len(subs) for subs in self._subscriptions.values())
+                "details": self.get_environments_info()
             }
         }
-    
+
+
     # ==================== Monitor 管理 ====================
     
     def enable_monitoring(self, client_id: str, level: str) -> bool:
@@ -378,7 +416,7 @@ class SessionManager:
             return False
         
         self._monitored_clients[client_id] = level
-        self.logger.info(f"Client {client_id} enabled monitoring (level: {level})")
+        logger.info(f"Client {client_id} enabled monitoring (level: {level})")
         return True
     
     def disable_monitoring(self, client_id: str) -> bool:
@@ -395,7 +433,7 @@ class SessionManager:
             return False
         
         self._monitored_clients.pop(client_id, None)
-        self.logger.info(f"Client {client_id} disabled monitoring")
+        logger.info(f"Client {client_id} disabled monitoring")
         return True
     
     def is_monitored(self, client_id: str) -> bool:
@@ -422,7 +460,7 @@ class SessionManager:
             self._subscriptions[target_client_id] = set()
         
         self._subscriptions[target_client_id].add(monitor_id)
-        self.logger.info(f"Monitor {monitor_id} subscribed to {target_client_id}")
+        logger.info(f"Monitor {monitor_id} subscribed to {target_client_id}")
         return True
     
     def unsubscribe_monitor(self, monitor_id: str, target_client_id: str) -> bool:
@@ -445,7 +483,7 @@ class SessionManager:
         if not self._subscriptions[target_client_id]:
             del self._subscriptions[target_client_id]
         
-        self.logger.info(f"Monitor {monitor_id} unsubscribed from {target_client_id}")
+        logger.info(f"Monitor {monitor_id} unsubscribed from {target_client_id}")
         return True
     
     def get_subscribers(self, client_id: str) -> Set[str]:
@@ -463,7 +501,7 @@ class SessionManager:
     async def forward_monitor_data(
         self,
         client_id: str,
-        data_type: str,
+        name: str,
         data: dict
     ) -> None:
         """
@@ -471,16 +509,13 @@ class SessionManager:
         
         Args:
             client_id: 被监控的客户端 ID
-            data_type: 监控数据类型
+            name: 监控数据类型
             data: 监控数据内容
         """
         # 检查是否有 Monitor 订阅此客户端
         if client_id not in self._subscriptions:
             return
-        
-        # 导入必要的模型
-        from star_protocol.models import Envelope, EnvelopeType, MonitorPayload, MonitorType
-        
+
         # 构建转发消息
         envelope = Envelope(
             type=EnvelopeType.MONITOR,
@@ -489,7 +524,7 @@ class SessionManager:
             payload=MonitorPayload(
                 type=MonitorType.DATA,
                 content={
-                    "data_type": data_type,
+                    "name": name,
                     "data": data,
                     "timestamp": int(time.time() * 1000)
                 }
@@ -502,9 +537,9 @@ class SessionManager:
             session = self.get_session(monitor_id)
             if session:
                 await session.websocket.send_text(envelope.model_dump_json())
-                self.logger.debug(f"Forwarded {data_type} from {client_id} to {monitor_id}")
+                logger.debug(f"Forwarded {name} from {client_id} to {monitor_id}")
             else:
-                self.logger.warning(f"Monitor {monitor_id} session not found")
+                logger.warning(f"Monitor {monitor_id} session not found")
     
     def _cleanup_monitored_client(self, client_id: str) -> None:
         """
@@ -519,7 +554,7 @@ class SessionManager:
         # 移除订阅关系
         self._subscriptions.pop(client_id, None)
         
-        self.logger.info(f"Cleaned up monitoring data for {client_id}")
+        logger.info(f"Cleaned up monitoring data for {client_id}")
     
     def _cleanup_monitor(self, monitor_id: str) -> None:
         """
@@ -534,4 +569,4 @@ class SessionManager:
             if not self._subscriptions[client_id]:
                 del self._subscriptions[client_id]
         
-        self.logger.info(f"Cleaned up subscriptions for monitor {monitor_id}")
+        logger.info(f"Cleaned up subscriptions for monitor {monitor_id}")

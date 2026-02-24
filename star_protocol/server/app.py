@@ -91,7 +91,7 @@ def create_hub_app(
     async def list_environments():
         """列出所有环境"""
         return {
-            "environments": router.connection_manager.get_environment_details()
+            "environments": router.connection_manager.get_environments_info()
         }
     
     @app.get("/clients/{client_id}")

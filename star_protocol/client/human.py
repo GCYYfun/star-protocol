@@ -81,9 +81,7 @@ class HumanClient(BaseClient):
             action_name: 动作名称
             params: 动作参数
         """
-        content = {"name": action_name}
-        if params:
-            content.update(params)
+        content = {"name": action_name, "params": params or {}}
         
         envelope = Envelope(
             type="message",

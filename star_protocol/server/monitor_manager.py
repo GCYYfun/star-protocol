@@ -139,7 +139,7 @@ class MonitorManager:
     async def forward_monitor_data(
         self,
         client_id: str,
-        data_type: str,
+        data_name: str,
         data: dict,
         session_manager: SessionManager
     ) -> None:
@@ -148,9 +148,9 @@ class MonitorManager:
         
         Args:
             client_id: 被监控的 Client ID
-            data_type: 监控数据类型
+            data_name: 监控数据类型名称
             data: 监控数据内容
-            connection_manager: Connection 管理器
+            session_manager: Session 管理器代理
         """
         # 检查是否有 Monitor 订阅此 Client
         if client_id not in self.subscriptions:
@@ -164,7 +164,7 @@ class MonitorManager:
             payload=MonitorPayload(
                 type=MonitorType.DATA,
                 content={
-                    "data_type": data_type,
+                    "name": data_name,
                     "data": data,
                     "timestamp": int(time.time() * 1000)
                 }
@@ -177,7 +177,7 @@ class MonitorManager:
             session = session_manager.get_session(monitor_id)
             if session:
                 await session.websocket.send_text(envelope.model_dump_json())
-                self.logger.debug(f"Forwarded {data_type} from {client_id} to {monitor_id}")
+                self.logger.debug(f"Forwarded {data_name} from {client_id} to {monitor_id}")
             else:
                 self.logger.warning(f"Monitor {monitor_id} session not found")
     

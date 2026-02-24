@@ -31,8 +31,10 @@ class Envelope(BaseModel):
                     "type": "action",
                     "content": {
                         "name": "move",
-                        "x": 10,
-                        "y": 5
+                        "params": {
+                            "x": 10,
+                            "y": 5
+                        }
                     }
                 }
             }

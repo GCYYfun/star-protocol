@@ -126,21 +126,21 @@ class MonitorableMixin:
 
     async def _send_monitor_data(
         self,
-        data_type: str,
+        data_name: str,
         data: Dict[str, Any]
     ) -> None:
         """
         发送监控数据到 Hub
         
         Args:
-            data_type: 数据类型
+            data_name: 数据类型名称
             data: 数据内容
         """
         if not self._monitor_enabled:
             return
         
         # 检查数据类型过滤
-        if self._monitor_data_types and data_type not in self._monitor_data_types:
+        if self._monitor_data_types and data_name not in self._monitor_data_types:
             return
         
         # 发送监控数据到 Hub
@@ -151,14 +151,14 @@ class MonitorableMixin:
             payload=MonitorPayload(
                 type=MonitorType.DATA,
                 content={
-                    "data_type": data_type,
+                    "name": data_name,
                     "data": data,
                     "timestamp": int(time.time() * 1000)
                 }
             )
         ))
         
-        self.logger.debug(f"Sent monitor data: {data_type}")
+        self.logger.debug(f"Sent monitor data: {data_name}")
     
     async def _on_state_change(self, old_state: str, new_state: str, **kwargs) -> None:
         """状态变化时的回调（子类可重写）"""

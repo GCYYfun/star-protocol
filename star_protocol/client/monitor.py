@@ -174,14 +174,14 @@ class MonitorClient(BaseClient):
         elif payload.type == MonitorType.DATA:
             # 处理监控数据
             client_id = envelope.sender  # 从 sender 获取 client_id
-            data_type = payload.content.get("data_type")
+            data_name = payload.content.get("name")
             data = payload.content.get("data")
             
             # 存储数据
-            await self.storage.save(client_id, data_type, data)
+            await self.storage.save(client_id, data_name, data)
             
             # 触发回调
-            await self.on_monitor_data(client_id, data_type, data)
+            await self.on_monitor_data(client_id, data_name, data)
     
     async def _handle_monitor_notify(self, content: Dict[str, Any]) -> None:
         """处理 Monitor 通知"""

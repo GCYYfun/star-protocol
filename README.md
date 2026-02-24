@@ -7,7 +7,7 @@
 - ✅ **类型安全**: 使用 Pydantic 模型确保消息结构正确性
 - ✅ **异步优先**: 基于 `asyncio` 和 `websockets` 的高性能实现
 - ✅ **FastAPI 集成**: 生产级 Hub Server，支持 HTTP API 和 WebSocket
-- ✅ **四种客户端**: Agent、Environment、Human、Monitor 开箱即用
+- ✅ **五种客户端**: Agent、Environment、Human、Monitor、Hub Monitor 开箱即用
 - ✅ **Monitor 功能**: 实时监控 Agent 和 Environment 的交互状态
 - ✅ **自动重连**: 内置连接管理和故障恢复
 - ✅ **易于扩展**: 支持自定义 Payload 和中间件
@@ -115,12 +115,13 @@ class MyMonitor(MonitorClient):
 
 ## 📚 核心概念
 
-### 四种客户端类型
+### 五种客户端类型
 
 1. **Agent** - 智能体，执行动作并接收结果
 2. **Environment** - 环境，处理动作并返回结果，管理环境状态
 3. **Human** - 人类用户，可以观察和参与交互
-4. **Monitor** - 监控器，实时监控其他客户端的状态和消息
+4. **Monitor** - 业务监控，实时监听特定客户端的通讯状态和消息
+5. **Hub Monitor** - 系统监控，监听 Hub 上的所有系统与业务消息
 
 ### 消息类型
 
@@ -164,28 +165,30 @@ star_protocol/
 
 ## 📖 文档
 
-- [协议规范](SPEC.md) - 完整的协议定义
-- [快速开始指南](docs/quickstart.md) - 详细的入门教程
-- [API 参考](docs/api_reference.md) - 完整的 API 文档
-- [使用指南](docs/user_guide.md) - 深入的使用说明
+- [协议规范](docs/SP.md) - 完整的协议交互定义
+- [快速入门指南](docs/quickstart.md) - 了解 SDK 基础概念及起步流程
+- [API 参考](docs/api_reference.md) - 接口参数与核心类说明
 
 ## 💡 示例
 
 查看 `examples/` 目录获取更多示例：
 
-- `basic_agent.py` - 基础 Agent 示例
-- `basic_environment.py` - 基础 Environment 示例
-- `monitor_demo.py` - Monitor 功能完整演示
-- `test_simple.py` - 简单的端到端测试
+- [`demo_agent.py`](examples/demo_agent.py) - Agent 客户端功能演示
+- [`demo_env.py`](examples/demo_env.py) - Environment 客户端功能演示
+- [`demo_human.py`](examples/demo_human.py) - Human 客户端功能演示
+- [`demo_monitor.py`](examples/demo_monitor.py) - 独立 Monitor 客户端及 Hub Monitor 功能演示
+- [`INTERACTIVE_DEMO.md`](examples/INTERACTIVE_DEMO.md) - 多智能体完整交互情景演示指南
 
 ### 运行示例
 
 ```bash
-# 1. 启动 Hub
+# 1. 启动 Hub Server
 uv run python -m star_protocol.cli
 
-# 2. 在另一个终端运行示例
-uv run python examples/monitor_demo.py
+# 2. 在其他终端分别运行客户端示例代码进行联动测试
+uv run examples/demo_env.py
+uv run examples/demo_agent.py
+uv run examples/demo_monitor.py
 ```
 
 ## 🔧 开发
@@ -194,8 +197,8 @@ uv run python examples/monitor_demo.py
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-org/star-protocol-python
-cd star-protocol-python
+git clone https://github.com/your-org/star-protocol
+cd star-protocol
 
 # 安装依赖
 uv sync
@@ -250,4 +253,4 @@ MIT License
 
 - [GitHub 仓库](https://github.com/your-org/star-protocol-python)
 - [问题反馈](https://github.com/your-org/star-protocol-python/issues)
-- [协议规范](SPEC.md)
+- [协议规范](docs/SP.md)
