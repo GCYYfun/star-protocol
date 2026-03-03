@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 # System Payload Contents
 class SystemCtrlContent(TypedDict, total=False):
     op: str
+    env_id: Optional[str]
 
 class SystemNotifyContent(TypedDict, total=False):
     event: str
