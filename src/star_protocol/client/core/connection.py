@@ -65,7 +65,7 @@ class ConnectionManager:
         # 确保 base_url 以 "/" 结尾以支持可靠的拼接
         if not base_url.endswith("/"):
             base_url += "/"
-        
+
         path = f"ws/{role}/{client_id}"
         return urljoin(base_url, path)
 
@@ -81,18 +81,22 @@ class ConnectionManager:
             StarConnectionError: 当协议级别或网络错误导致无法连接时抛出。
         """
         self._url = self._build_ws_url(url, role, client_id)
-        
+
         try:
             self.logger.debug(f"Attempting to connect WebSocket to {self._url}")
             # 进行实际连接，根据 websockets 版本可能有不同的行为表现
             self._ws = await websockets.connect(self._url)
             self.logger.info(f"Successfully connected to Hub Server at {self._url}")
-            
+
         except WebSocketException as ws_err:
             # 区分底层 WebSocket 特异性异常
-            self.logger.error(f"WebSocket specific network error during connect: {ws_err}")
-            raise StarConnectionError(f"WebSocket specific error connecting to {self._url}: {ws_err}") from ws_err
-            
+            self.logger.error(
+                f"WebSocket specific network error during connect: {ws_err}"
+            )
+            raise StarConnectionError(
+                f"WebSocket specific error connecting to {self._url}: {ws_err}"
+            ) from ws_err
+
         except Exception as e:
             # 捕获其它例如 DNS无法解析、拒绝连接等基础网络或 OS 异常
             self.logger.error(f"General connection failed: {e}")
@@ -108,12 +112,16 @@ class ConnectionManager:
             try:
                 await self._ws.close()
             except Exception as e:
-                self.logger.warning(f"Error occasionally occurred while closing websocket: {e}")
+                self.logger.warning(
+                    f"Error occasionally occurred while closing websocket: {e}"
+                )
             finally:
                 self._ws = None
                 self.logger.info("WebSocket disconnected gracefully.")
         else:
-            self.logger.debug("Attempted to disconnect, but websocket is already closed.")
+            self.logger.debug(
+                "Attempted to disconnect, but websocket is already closed."
+            )
 
     async def send_raw(self, data: str) -> None:
         """向 Hub 服务器下发未加工原始字符串包数据（通常期望是序列化过的 JSON）。
@@ -125,18 +133,24 @@ class ConnectionManager:
             StarConnectionError: 当前未连接，或者发送中途检测到由于网络导致中途中断。
         """
         if not self.is_connected():
-            raise StarConnectionError("Cannot send payload: No active connection with any server.")
-        
+            raise StarConnectionError(
+                "Cannot send payload: No active connection with any server."
+            )
+
         try:
             # ClientConnection.send supports str & bytes. We send str.
             await self._ws.send(data)
             self.logger.debug(f"Sent websocket payload: {len(data)} bytes")
-            
+
         except ConnectionClosed as closed_err:
-            self.logger.error(f"Remote connection unexpectedly closed during payload transmission: {closed_err}")
+            self.logger.error(
+                f"Remote connection unexpectedly closed during payload transmission: {closed_err}"
+            )
             await self.disconnect()
-            raise StarConnectionError(f"Connection automatically lost while sending data: {closed_err}") from closed_err
-            
+            raise StarConnectionError(
+                f"Connection automatically lost while sending data: {closed_err}"
+            ) from closed_err
+
         except Exception as e:
             self.logger.error(f"Failed to send outbound data through websocket: {e}")
             raise StarConnectionError(f"Failed to transmit data: {e}") from e
@@ -151,24 +165,30 @@ class ConnectionManager:
             StarConnectionError: 服务端掉线无法接收、管道闭合并抛出等。
         """
         if not self.is_connected():
-            raise StarConnectionError("Cannot receive incoming push: No active connection.")
-        
+            raise StarConnectionError(
+                "Cannot receive incoming push: No active connection."
+            )
+
         try:
             # ClientConnection.recv returns Data (str or bytes)
             message = await self._ws.recv()
-            
+
             # 若 recv 处于不同配置的 SubProtocol 偶尔返回了 bytes，做前置兼容
             if isinstance(message, bytes):
-                message = message.decode('utf-8')
-                
+                message = message.decode("utf-8")
+
             self.logger.debug(f"Received inbound payload: {len(message)} bytes")
             return message
-            
+
         except ConnectionClosed as closed_err:
-            self.logger.error(f"Host unexpectedly closed connection while waiting for frame read: {closed_err}")
+            self.logger.error(
+                f"Host unexpectedly closed connection while waiting for frame read: {closed_err}"
+            )
             await self.disconnect()
-            raise StarConnectionError(f"Connection terminated by Hub: {closed_err}") from closed_err
-            
+            raise StarConnectionError(
+                f"Connection terminated by Hub: {closed_err}"
+            ) from closed_err
+
         except Exception as e:
             self.logger.error(f"Unexpected receive operation failure: {e}")
             raise StarConnectionError(f"Failed to extract payload: {e}") from e
@@ -181,7 +201,7 @@ class ConnectionManager:
         """
         if self._ws is None:
             return False
-            
+
         return self._ws.state == State.OPEN
 
     @property
@@ -190,7 +210,7 @@ class ConnectionManager:
 
         Warning: 对于追求封装完备性，外部只应观察或监听；不建议外部直接操作此对象。
         返回该对象主要兼容一些需要在上级代理执行直接心跳探活等特异性长流控制的场景。
-        
+
         Returns:
             Optional[ClientConnection]: 后备所存 WebSocket 纯态连接对象。
         """

@@ -42,6 +42,7 @@ HELP_TEXT = """
 
 # ─── Human Client ──────────────────────────────────────────────────────────────
 
+
 class DemoHuman(HumanClient):
     """交互式 Human 客户端"""
 
@@ -78,6 +79,7 @@ class DemoHuman(HumanClient):
 
 # ─── 参数解析 ─────────────────────────────────────────────────────────────────
 
+
 def _parse_kv(tokens: list[str]) -> dict:
     """将 key=value 字符串列表转换为字典，自动尝试类型转换"""
     result = {}
@@ -96,6 +98,7 @@ def _parse_kv(tokens: list[str]) -> dict:
 
 
 # ─── 主函数 ───────────────────────────────────────────────────────────────────
+
 
 async def main():
     hub_url = "ws://localhost:8000"
@@ -166,7 +169,9 @@ async def main():
             # ── action <target> <action_name> key=value ... ───────────
             elif cmd == "action":
                 if len(args) < 2:
-                    console.print("[red]用法: action <target> <action_name> key=value ...[/red]")
+                    console.print(
+                        "[red]用法: action <target> <action_name> key=value ...[/red]"
+                    )
                     continue
                 target, action_name, *kv_tokens = args
                 params = _parse_kv(kv_tokens) or None
