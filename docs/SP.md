@@ -2,13 +2,13 @@
 
 ## 属性概览
 
-| 属性 | 描述 |
-| --- | --- |
-| **版本** | v1.0 |
-| **状态** | Draft |
+| 属性         | 描述                               |
+| ------------ | ---------------------------------- |
+| **版本**     | v1.0                               |
+| **状态**     | Draft                              |
 | **协议层级** | Application Layer (Over WebSocket) |
-| **传输格式** | JSON |
-| **最后更新** | 2026-02-11 |
+| **传输格式** | JSON                               |
+| **最后更新** | 2026-02-11                         |
 
 ---
 
@@ -61,7 +61,6 @@
   - [8.4 完整交互示例](#84-完整交互示例)
 - [Changelog](#changelog)
 
-
 ---
 
 ## 1. 概述 (Overview)
@@ -70,8 +69,8 @@
 
 ### 1.1 核心设计原则
 
-* **严格多态 (Strict Polymorphism)**：内层载荷 (Payload) 的结构和类型定义完全取决于外层信封 (Envelope) 的 `type` 字段。这种设计确保了路由层与业务层的解耦。
-* **环境即容器 (Environment as Room)**：Client 连接后默认处于私有状态 (Home)。必须显式加入特定的 Environment（类似于聊天室或游戏房间）才能与其他 Client 进行广播或交互。
+- **严格多态 (Strict Polymorphism)**：内层载荷 (Payload) 的结构和类型定义完全取决于外层信封 (Envelope) 的 `type` 字段。这种设计确保了路由层与业务层的解耦。
+- **环境即容器 (Environment as Room)**：Client 连接后默认处于私有状态 (Home)。必须显式加入特定的 Environment（类似于聊天室或游戏房间）才能与其他 Client 进行广播或交互。
 
 ---
 
@@ -97,19 +96,21 @@ graph TD
 
     style Hub fill:#f9f,stroke:#333,stroke-width:2px
 ```
+
 or
+
 ```
 ┌─────────────────┐          ┌─────────────────┐          ┌──────────────────┐
 │   Agent Client  │          │    Hub Server   │          │Environment Client│
 │ (Intelligent)   │  ◄────►  │   (Router)      │  ◄────►  │ (World Logic)    │
 └─────────────────┘          └─────────────────┘          └──────────────────┘
-                                      ▲                             
+                                      ▲
                                       │ WebSocket
                                       │
                                       │
                                       │
                                       ▼
-                            ┌───────────────────┐         
+                            ┌───────────────────┐
                             │    Human Client   │
                             │(Observer & Player)│
                             └───────────────────┘
@@ -123,23 +124,22 @@ or
 连接 URL 格式如下：
 `ws://<host>:<port>/<role>/<client_id>`
 
-* **role**: 客户端角色 (e.g., `agent`, `environment`, `human`)
-* **client_id**: 客户端唯一标识
+- **role**: 客户端角色 (e.g., `agent`, `environment`, `human`)
+- **client_id**: 客户端唯一标识
 
 ### 3.2 状态流转
 
 客户端连接后存在两种主要状态：
 
 1. **Home (初始状态)**
-* **权限**: 只能收发 `system` 类型消息。
-* **行为**: 进行身份验证、列出房间、申请加入环境。
 
+- **权限**: 只能收发 `system` 类型消息。
+- **行为**: 进行身份验证、列出房间、申请加入环境。
 
 2. **In-Env (环境内状态)**
-* **权限**: 可收发 `message`, `broadcast` 类型消息。
-* **行为**: 业务交互、感知环境。
 
-
+- **权限**: 可收发 `message`, `broadcast` 类型消息。
+- **行为**: 业务交互、感知环境。
 
 ---
 
@@ -183,17 +183,16 @@ interface Envelope {
   /** 业务载荷，类型取决于 Envelope.type */
   payload: SystemPayload | MessagePayload | BroadcastPayload | MonitorPayload;
 }
-
 ```
 
 #### 4.1.1 EnvelopeType 枚举
 
-| 类型值 | 含义 | 通信模式 | 对应 Payload 类型 |
-| --- | --- | --- | --- |
-| `system` | 系统控制 | Hub 处理或发出 | `SystemPayload` |
-| `message` | 业务消息 | 点对点 (Unicast) | `MessagePayload` |
+| 类型值      | 含义     | 通信模式         | 对应 Payload 类型  |
+| ----------- | -------- | ---------------- | ------------------ |
+| `system`    | 系统控制 | Hub 处理或发出   | `SystemPayload`    |
+| `message`   | 业务消息 | 点对点 (Unicast) | `MessagePayload`   |
 | `broadcast` | 环境广播 | 组播 (Multicast) | `BroadcastPayload` |
-| `monitor` | 监控数据 | Hub 转发 | `MonitorPayload` |
+| `monitor`   | 监控数据 | Hub 转发         | `MonitorPayload`   |
 
 ---
 
@@ -201,8 +200,8 @@ interface Envelope {
 
 #### A. System Payload
 
-* **条件**: `Envelope.type == "system"`
-* **用途**: 连接管理、房间控制、错误报告。
+- **条件**: `Envelope.type == "system"`
+- **用途**: 连接管理、房间控制、错误报告。
 
 ```typescript
 interface SystemPayload {
@@ -211,17 +210,16 @@ interface SystemPayload {
 }
 
 enum SystemType {
-  ERROR = "error",      // 错误信息
-  CTRL = "ctrl",        // 房间控制 (join, leave)
-  NOTIFY = "notify"     // 系统通知 (joined, left)
+  ERROR = "error", // 错误信息
+  CTRL = "ctrl", // 房间控制 (join, leave)
+  NOTIFY = "notify", // 系统通知 (joined, left)
 }
-
 ```
 
 #### B. Message Payload
 
-* **条件**: `Envelope.type == "message"`
-* **用途**: Agent 与 Environment 之间的核心业务交互。
+- **条件**: `Envelope.type == "message"`
+- **用途**: Agent 与 Environment 之间的核心业务交互。
 
 ```typescript
 interface MessagePayload {
@@ -230,18 +228,17 @@ interface MessagePayload {
 }
 
 enum MessageType {
-  ACTION = "action",    // Agent 发出的动作
-  OUTCOME = "outcome",  // Environment 返回的结果
-  STREAM = "stream",    // 点对点数据流 (如 Token 流)
-  EVENT = "event"       // 定向事件通知
+  ACTION = "action", // Agent 发出的动作
+  OUTCOME = "outcome", // Environment 返回的结果
+  STREAM = "stream", // 点对点数据流 (如 Token 流)
+  EVENT = "event", // 定向事件通知
 }
-
 ```
 
 #### C. Broadcast Payload
 
-* **条件**: `Envelope.type == "broadcast"`
-* **用途**: 环境向多个 Agent 广播状态。
+- **条件**: `Envelope.type == "broadcast"`
+- **用途**: 环境向多个 Agent 广播状态。
 
 ```typescript
 interface BroadcastPayload {
@@ -250,16 +247,15 @@ interface BroadcastPayload {
 }
 
 enum BroadcastType {
-  EVENT = "event",      // 环境事件 (天气变化, 时间流逝)
-  STREAM = "stream"     // 广播数据流 (如解说语音)
+  EVENT = "event", // 环境事件 (天气变化, 时间流逝)
+  STREAM = "stream", // 广播数据流 (如解说语音)
 }
-
 ```
 
 #### D. Monitor Payload
 
-* **条件**: `Envelope.type == "monitor"`
-* **用途**: 监控数据的传输和控制。
+- **条件**: `Envelope.type == "monitor"`
+- **用途**: 监控数据的传输和控制。
 
 ```typescript
 interface MonitorPayload {
@@ -268,13 +264,12 @@ interface MonitorPayload {
 }
 
 enum MonitorType {
-  CTRL = "ctrl",        // 控制命令 (enable, disable, subscribe, unsubscribe)
-  DATA = "data",        // 监控数据 (state_change, message_sent, etc.)
-  NOTIFY = "notify"     // 通知 (monitoring_enabled, subscribed, etc.)
+  CTRL = "ctrl", // 控制命令 (enable, disable, subscribe, unsubscribe)
+  DATA = "data", // 监控数据 (state_change, message_sent, etc.)
+  NOTIFY = "notify", // 通知 (monitoring_enabled, subscribed, etc.)
 }
-
-
 ```
+
 ---
 
 ## 5. System Envelope (系统信件)
@@ -284,10 +279,10 @@ enum MonitorType {
 System Envelope（系统控制信件）是不涉及特定业务逻辑的底层控制协议层。它的主要目标是管理客户端的连接状态、分配和进入房间（Environment）、进行错误报告以及系统级的通知。
 所有与 **Hub Server** 直接交互的控制指令必须通过此通道发送。
 
-
 ### 5.2 交互类型与数据结构 (SystemType)
 
 **本节概览 (Mini-TOC)**
+
 - [5.2.1 `ctrl`：控制指令](#521-ctrl-控制指令)
 - [5.2.2 `notify`：系统通知](#522-notify-系统通知)
 - [5.2.3 `error`：错误回调](#523-error-错误回调)
@@ -305,7 +300,7 @@ System Envelope（系统控制信件）是不涉及特定业务逻辑的底层�
 // Envelope.payload.content 的实际内容
 interface SystemCtrlContent {
   op: "join" | "leave" | string; // 具体操作命令，如加入房间等
-  [key: string]: any; // 可基于具体的命令补充附加可选参数，例如 env_id 
+  [key: string]: any; // 可基于具体的命令补充附加可选参数，例如 env_id
 }
 ```
 
@@ -325,7 +320,7 @@ interface SystemCtrlContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface SystemNotifyContent {
-  event: string;       // 通知事件类型
+  event: string; // 通知事件类型
   msg: string; // 通知的消息
   [key: string]: any; // 可选的附带参数集合，由业务所需自行派生
 }
@@ -347,10 +342,10 @@ interface SystemNotifyContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface SystemErrorContent {
-  code: number;          // 标准错误码 (类 HTTP 状态码或自定义码)
-  msg: string;           // 人类可读的错误明文描述
+  code: number; // 标准错误码 (类 HTTP 状态码或自定义码)
+  msg: string; // 人类可读的错误明文描述
   original_msg_id?: string; // 选填：造成该错误的原始信封 ID，便于溯源
-  details?: any;         // 选填：更详细的错误原因、堆栈信息等扩展排查参数
+  details?: any; // 选填：更详细的错误原因、堆栈信息等扩展排查参数
 }
 ```
 
@@ -359,6 +354,7 @@ interface SystemErrorContent {
 以下是一个典型的“Agent 申请加入 Environment”的过程：
 
 **步骤 1：Agent 发起 Join 控制指令（Client -> Hub）**
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -377,6 +373,7 @@ interface SystemErrorContent {
 ```
 
 **步骤 2：Hub 返回审批结果/通知（Hub -> Client）**
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440005",
@@ -403,10 +400,10 @@ interface SystemErrorContent {
 Message Envelope 是 Star Protocol 的**核心业务信件**，主要处理基于单播（Unicast，点对点）形式的领域逻辑交互。在多智能体场景中，它代表着 Agent 执行特定的决策，或者是 Environment 返还具体的动作结果。
 使用此通道的客户端**必须处于同一个 Environment 之中**（In-Env 状态）。
 
-
 ### 6.2 交互类型与数据结构 (MessageType)
 
 **本节概览 (Mini-TOC)**
+
 - [6.2.1 `action`：动作请求](#621-action-动作请求)
 - [6.2.2 `outcome`：操作结果反馈](#622-outcome-操作结果反馈)
 - [6.2.3 `event`：私有/特定事件通知](#623-event-私有特定事件通知)
@@ -424,10 +421,12 @@ Message Envelope 是 Star Protocol 的**核心业务信件**，主要处理基�
 ```typescript
 // Envelope.payload.content 的实际内容
 interface MessageActionContent {
-  name: string;        // 动作的唯一标识符 (例如: "move_to", "use_item")
-  params?: {           // 可选的动作所需参数对象，业务全权自定义
+  id: string; // Action 的 ID，必须带上以保证回调对照(如有需要)
+  name: string; // 动作的唯一标识符 (例如: "move_to", "use_item")
+  params?: {
+    // 可选的动作所需参数对象，业务全权自定义
     [key: string]: any;
-  }; 
+  };
 }
 ```
 
@@ -441,12 +440,13 @@ interface MessageActionContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface MessageOutcomeContent {
-  action_ref: string;  // 原始 Action Envelope 的 ID，必须带上以保证回调对照
-  success: boolean;    // 此动作是否成功结算或生效
-  data?: {             // 选填：若是成功，里面包含了更新后的自身状态、获取资源的详细字典，全权自定义
-    [key: string]: any; 
+  ref_id: string; // 原始 Action Envelope 的 ID，必须带上以保证回调对照
+  success: boolean; // 此动作是否成功结算或生效
+  data?: {
+    // 选填：若是成功，里面包含了更新后的自身状态、获取资源的详细字典，全权自定义
+    [key: string]: any;
   };
-  error?: string;      // 选填：若是失败(success=false)，可直接给出理由说明
+  error?: string; // 选填：若是失败(success=false)，可直接给出理由说明
 }
 ```
 
@@ -460,9 +460,11 @@ interface MessageOutcomeContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface MessageEventContent {
-  name: string;        // 识别的具体业务事件名称 (如: "conversation")
-  data: {              // 推发的数据载荷，全权自定义扩展
-    [key: string]: any; 
+  id: string; // Event 的 ID，必须带上以保证回调对照(如有需要)
+  name: string; // 识别的具体业务事件名称 (如: "conversation")
+  data: {
+    // 推发的数据载荷，全权自定义扩展
+    [key: string]: any;
   };
 }
 ```
@@ -481,10 +483,10 @@ interface MessageEventContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface MessageStreamContent {
-  stream_id: string;   // 本次流的唯一会话标识，拼接碎片的依据
-  sequence: number;    // 序号，保证流片段是有序到达的 (比如 0、1、2 递增)
-  chunk: any;          // 本次碎片的实际内容 (例如单个字串 token，也可以是对象)
-  is_end: boolean;     // 标记本段流式传输是否到此结束
+  id: string; // Stream 的 ID，确保唯一性
+  sequence: number; // 序号，保证流片段是有序到达的 (比如 0、1、2 递增)
+  chunk: any; // 本次碎片的实际内容 (例如单个字串 token，也可以是对象)
+  is_end: boolean; // 标记本段流式传输是否到此结束
 }
 ```
 
@@ -493,6 +495,7 @@ interface MessageStreamContent {
 以下模拟一个 Agent 在环境中执行“移动 (move)”动作，并收到环境确定的交互过程。
 
 **步骤 1：Agent 发起动作（Agent -> Env）**
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440100",
@@ -503,8 +506,9 @@ interface MessageStreamContent {
   "payload": {
     "type": "action",
     "content": {
+      "id": "action-move-0403085830-001",
       "name": "move",
-      "params":{
+      "params": {
         "x": 10,
         "y": 5
       }
@@ -514,6 +518,7 @@ interface MessageStreamContent {
 ```
 
 **步骤 2：Environment 返回结算结果（Env -> Agent）**
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440150",
@@ -524,10 +529,10 @@ interface MessageStreamContent {
   "payload": {
     "type": "outcome",
     "content": {
-      "action_ref": "550e8400-e29b-41d4-a716-446655440100",
+      "ref_id": "550e8400-e29b-41d4-a716-446655440100",
       "success": true,
       "data": {
-        "current_pos": {"x": 10, "y": 5},
+        "current_pos": { "x": 10, "y": 5 },
         "stamina_cost": 2.5
       }
     }
@@ -547,8 +552,9 @@ interface MessageStreamContent {
   "payload": {
     "type": "event",
     "content": {
+      "id": "event-conversation-0403085830-001",
       "name": "conversation",
-      "data":{
+      "data": {
         "input": "今天天气如何？",
         "speaker_id": "system_npc"
       }
@@ -565,10 +571,10 @@ interface MessageStreamContent {
 
 Broadcast 通道是用于向一个群体分发状态变化的**公共通道**。当环境（或具备高权限的观察端）发生涉及全体或某个组落盘的数据变量更新时，它不再需要逐个给系统内的 Agent 循环发送信息，而是利用特别的标识 (`@all` 或 `@env`) 将信封发出。Hub Server 接到它后会自动进行展开分发。
 
-
 ### 7.2 交互类型与数据结构 (BroadcastType)
 
 **本节概览 (Mini-TOC)**
+
 - [7.2.1 `event`：全局环境事件](#721-event-全局环境事件)
 - [7.2.2 `stream`：数据公共流](#722-stream-数据公共流)
 
@@ -584,9 +590,11 @@ Broadcast 是公共集会场所，主要包含以下 2 种子协议类型，它�
 ```typescript
 // Envelope.payload.content 的实际内容
 interface BroadcastEventContent {
-  name: string;        // 识别的具体广播事件名称 (如: "time_passed", "weather_update")
-  data: {              // 推发的全局数据载荷，全权自定义扩展
-    [key: string]: any; 
+  id: string; // Event 的 ID，必须带上以保证回调对照(如有需要)
+  name: string; // 识别的具体广播事件名称 (如: "time_passed", "weather_update")
+  data: {
+    // 推发的全局数据载荷，全权自定义扩展
+    [key: string]: any;
   };
 }
 ```
@@ -607,10 +615,10 @@ interface BroadcastEventContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface BroadcastStreamContent {
-  stream_id: string;   // 本次广播流的唯一会话标识
-  sequence: number;    // 序号，保证流片段是有序解析的
-  chunk: any;          // 本次广播帧的实际内容
-  is_end: boolean;     // 标记本段公共广播流是否到此结束
+  id: string; // 本次广播流的唯一会话标识
+  sequence: number; // 序号，保证流片段是有序解析的
+  chunk: any; // 本次广播帧的实际内容
+  is_end: boolean; // 标记本段公共广播流是否到此结束
 }
 ```
 
@@ -619,6 +627,7 @@ interface BroadcastStreamContent {
 以下展示 Environment 触发了“时间推进”全局事件，向所有处于环境内的角色告知：
 
 **步骤 1：Environment 广播事件（Env -> @all）**
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440200",
@@ -629,8 +638,9 @@ interface BroadcastStreamContent {
   "payload": {
     "type": "event",
     "content": {
+      "id": "event-time_passed-0403085830-001",
       "name": "time_passed",
-      "data":{
+      "data": {
         "time_of_day": "night",
         "temperature": 15,
         "message": "The sun has set, it's getting colder."
@@ -639,7 +649,8 @@ interface BroadcastStreamContent {
   }
 }
 ```
-*注：此消息发出后，Hub 将解析 `@all`，并根据当前的拓扑图，将其拷贝至所有连接且在线状态的目标 Agent/Human 所对应的独立 WebSocket 链路中。*
+
+_注：此消息发出后，Hub 将解析 `@all`，并根据当前的拓扑图，将其拷贝至所有连接且在线状态的目标 Agent/Human 所对应的独立 WebSocket 链路中。_
 
 ---
 
@@ -664,6 +675,7 @@ Client (被监控)     Hub (转发)      Monitor (观察)
 ### 8.3 交互类型与数据结构 (MonitorType)
 
 **本节概览 (Mini-TOC)**
+
 - [8.3.1 `ctrl`：控制指令](#831-ctrl-控制指令)
 - [8.3.2 `data`：透传监控数据](#832-data-透传监控数据)
 - [8.3.3 `notify`：监控通知](#833-notify-监控通知)
@@ -684,7 +696,8 @@ interface MonitorCtrlContent {
   [key: string]: any; // 可选，如 `level: "DEBUG"` 或 `target_client_id: "agent_01"` 等参数
 }
 ```
-*注：监控级别 `level` 通常包含 `DEBUG`, `INFO`, `WARNING`, `ERROR`*
+
+_注：监控级别 `level` 通常包含 `DEBUG`, `INFO`, `WARNING`, `ERROR`_
 
 **`MonitorCtrlContent` 负载详情举例**：
 | `op` | 说明 | 附加参数示例数据 |
@@ -693,7 +706,6 @@ interface MonitorCtrlContent {
 | `disable` | 关闭全局/特定监控 | 无附加参数 |
 | `subscribe` | 开始订阅特定 Client 数据 | `{target_client_id:string}` |
 | `unsubscribe` | 取消订阅特定 Client 数据 | `{target_client_id:string}` |
-
 
 #### 8.3.2 `data` (透传监控数据)
 
@@ -705,9 +717,9 @@ interface MonitorCtrlContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface MonitorDataContent {
-  name: "register" | "state_change" | "message_sent" | "message_received"; 
-  data: any;           // 具体的监控负载快照，详情见下表
-  timestamp: number;   // 动作发生时的时间戳
+  name: "register" | "state_change" | "message_sent" | "message_received";
+  data: any; // 具体的监控负载快照，详情见下表
+  timestamp: number; // 动作发生时的时间戳
 }
 ```
 
@@ -729,8 +741,8 @@ interface MonitorDataContent {
 ```typescript
 // Envelope.payload.content 的实际内容
 interface MonitorNotifyContent {
-  event: string;       // 通知事件类型，比如 "subscribed", "enabled"
-  msg: string;    // 文字说明
+  event: string; // 通知事件类型，比如 "subscribed", "enabled"
+  msg: string; // 文字说明
   [key: string]: any; // 可选的附带参数集合，由业务所需自行派生
 }
 ```
@@ -746,6 +758,7 @@ interface MonitorNotifyContent {
 以下展示了启动监控并获取 Agent 动作快照的一套连贯交互。
 
 **步骤 1：Agent 启用监控 (Agent → Hub)**
+
 ```json
 {
   "id": "uuid_1",
@@ -764,6 +777,7 @@ interface MonitorNotifyContent {
 ```
 
 **步骤 2：Hub 通知 Agent 已启用 (Hub → Agent)**
+
 ```json
 {
   "id": "uuid_2",
@@ -782,6 +796,7 @@ interface MonitorNotifyContent {
 ```
 
 **步骤 3：独立 Monitor 面板订阅特定 Agent (Monitor → Hub)**
+
 ```json
 {
   "id": "uuid_3",
@@ -800,6 +815,7 @@ interface MonitorNotifyContent {
 ```
 
 **步骤 4：Agent 发生系统状态改变并上报 Monitor Envelope (Agent → Hub)**
+
 ```json
 {
   "id": "uuid_4",
@@ -823,12 +839,13 @@ interface MonitorNotifyContent {
 ```
 
 **步骤 5：Hub 向订阅者原样派发（Hub → Monitor），注意发送者未变**
+
 ```json
 {
   "id": "uuid_5",
   "timestamp": 1234568005,
   "type": "monitor",
-  "sender": "agent_01",   // 注意: 发送者保持并透传，直接定位追踪来源
+  "sender": "agent_01", // 注意: 发送者保持并透传，直接定位追踪来源
   "recipient": "monitor_01",
   "payload": {
     "type": "data",
@@ -846,7 +863,6 @@ interface MonitorNotifyContent {
 ```
 
 ---
-
 
 ## Changelog
 

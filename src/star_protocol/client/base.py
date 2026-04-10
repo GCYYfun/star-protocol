@@ -305,9 +305,11 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
                     # 监控钩子
                     if self._monitorable:
                         await self._on_error(error_dict)
-        
-        finally:
-            await self.disconnect()
+        except Exception as e:
+            self.logger.error(f"Error processing message: {e}")
+            # traceback.print_exc()
+        # finally:
+        #     await self.disconnect()
     
     # ==================== 内部方法 ====================
     

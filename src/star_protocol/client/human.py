@@ -42,17 +42,44 @@ class HumanClient(BaseClient):
             logger=logger
         )
     
-    async def send_message(
+    # async def send_message(
+    #     self,
+    #     recipient: str,
+    #     content: Dict[str, Any]
+    # ) -> None:
+    #     """
+    #     发送消息给其他客户端
+        
+    #     Args:
+    #         recipient: 目标客户端 ID
+    #         content: 消息内容
+    #     """
+    #     envelope = Envelope(
+    #         type="message",
+    #         sender=self.client_id,
+    #         recipient=recipient,
+    #         payload=MessagePayload(
+    #             type="event",
+    #             content=content
+    #         )
+    #     )
+        
+    #     await self.send(envelope)
+    #     self.logger.info(f"Sent message -> {recipient}")
+    
+    async def send_event(
         self,
         recipient: str,
-        content: Dict[str, Any]
+        event_name: str,
+        event_data: Dict[str, Any]
     ) -> None:
         """
-        发送消息给其他客户端
+        发送点对点事件给其他客户端
         
         Args:
             recipient: 目标客户端 ID
-            content: 消息内容
+            event_name: 事件名称
+            event_data: 事件的具体参数与数据
         """
         envelope = Envelope(
             type="message",
@@ -60,12 +87,15 @@ class HumanClient(BaseClient):
             recipient=recipient,
             payload=MessagePayload(
                 type="event",
-                content=content
+                content={
+                    "name": event_name,
+                    "data": event_data
+                }
             )
         )
         
         await self.send(envelope)
-        self.logger.info(f"Sent message -> {recipient}")
+        self.logger.info(f"Sent event: {event_name} -> {recipient}")
     
     async def send_action(
         self,

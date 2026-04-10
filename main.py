@@ -1,5 +1,5 @@
 def main():
-    print("Hello from star-protocol-python!")
+    print("Hello from star-protocol!")
 
 
 if __name__ == "__main__":

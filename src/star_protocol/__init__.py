@@ -5,7 +5,7 @@ A lightweight, strongly-typed communication protocol for Multi-Agent Systems (MA
 over WebSocket, supporting Agent, Environment, and Human collaboration.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from star_protocol.models.envelope import Envelope
 from star_protocol.models.payloads import (
@@ -28,7 +28,13 @@ from star_protocol.client import (
     MonitorClient,
     MonitorLevel,
 )
-from star_protocol.server import create_hub_app
+from star_protocol.server import (
+    MessageRouter,
+    SessionManager,
+    Session,
+    SessionState,
+    ClientRole,
+)
 from star_protocol.exceptions import (
     StarProtocolError,
     ConnectionError,
@@ -60,7 +66,11 @@ __all__ = [
     "MonitorClient",
     "MonitorLevel",
     # Server
-    "create_hub_app",
+    "MessageRouter",
+    "SessionManager",
+    "Session",
+    "SessionState",
+    "ClientRole",
     # Exceptions
     "StarProtocolError",
     "ConnectionError",
@@ -69,4 +79,3 @@ __all__ = [
     "InvalidStateError",
     "MessageError",
 ]
-
