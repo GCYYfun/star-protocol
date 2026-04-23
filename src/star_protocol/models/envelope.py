@@ -62,34 +62,43 @@ class Envelope(BaseModel):
     @classmethod
     def validate_payload_type(cls, v, info):
         """验证 payload 类型与 envelope type 匹配，并强制转换为正确模型"""
+        if not info.data:
+            return v
+            
         t = info.data.get("type")
         if v is None:
             return v
 
         # 使用 info.data.get("type") 强制进行特定的模型校验和加载
         # 避免 Union 在有重叠 Literal (如 "event", "stream") 时匹配错误
+        # 如果 v 已经是某个模型实例，但类型不匹配 (由于 Union 自动匹配可能匹配错)，将其转回 dict 重新校验
+        def get_dict(v):
+            if isinstance(v, (SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload)):
+                return v.model_dump()
+            return v
+
         try:
             if t == "system":
                 return (
-                    SystemPayload.model_validate(v)
+                    SystemPayload.model_validate(get_dict(v))
                     if not isinstance(v, SystemPayload)
                     else v
                 )
             elif t == "message":
                 return (
-                    MessagePayload.model_validate(v)
+                    MessagePayload.model_validate(get_dict(v))
                     if not isinstance(v, MessagePayload)
                     else v
                 )
             elif t == "broadcast":
                 return (
-                    BroadcastPayload.model_validate(v)
+                    BroadcastPayload.model_validate(get_dict(v))
                     if not isinstance(v, BroadcastPayload)
                     else v
                 )
             elif t == "monitor":
                 return (
-                    MonitorPayload.model_validate(v)
+                    MonitorPayload.model_validate(get_dict(v))
                     if not isinstance(v, MonitorPayload)
                     else v
                 )

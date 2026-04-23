@@ -139,13 +139,21 @@ class MessageRouter:
         # 2. 预处理：为缺失 ID 的 Action 或 Event 自动生成 ID
         if envelope.type == EnvelopeType.MESSAGE:
             payload = envelope.payload
-            if payload.type == "action":
-                content: MessageActionContent = payload.content
-                if not content.get("id"):
+            if payload and payload.type == "action":
+                content = payload.content
+                if content is None:
+                    logger.warning(f"Action content is None from {envelope.sender}")
+                elif not hasattr(content, "get"):
+                    logger.error(f"Action content has no 'get' attribute: {content}")
+                elif not content.get("id"):
                     content["id"] = gen_id("action", content.get("name", "unknown"))
-            elif payload.type == "event":
-                content: MessageEventContent = payload.content
-                if not content.get("id"):
+            elif payload and payload.type == "event":
+                content = payload.content
+                if content is None:
+                    logger.warning(f"Event content is None from {envelope.sender}")
+                elif not hasattr(content, "get"):
+                    logger.error(f"Event content has no 'get' attribute: {content}")
+                elif not content.get("id"):
                     content["id"] = gen_id("event", content.get("name", "unknown"))
 
         # 3. 记录监控：消息到达 Hub (message_received)
@@ -200,10 +208,19 @@ class MessageRouter:
         payload = envelope.payload
 
         if payload.type == "ctrl":
-            op = payload.content.get("op")
+            content = payload.content
+            if content is None:
+                logger.warning(f"Ctrl content is None from {envelope.sender}")
+                return
+
+            if not hasattr(content, "get"):
+                logger.error(f"Ctrl content has no 'get' attribute: {content}")
+                return
+
+            op = content.get("op")
 
             if op == "join":
-                env_id = payload.content.get("env_id")
+                env_id = content.get("env_id")
 
                 # 检查环境是否存在
                 if not self.connection_manager.environment_exists(env_id):
@@ -459,12 +476,17 @@ class MessageRouter:
 
         if payload.type == MonitorType.CTRL:
             # 处理控制命令
-            op = payload.content.get("op")
+            content = payload.content
+            if content is None:
+                logger.warning(f"Received monitor ctrl message with null content from {envelope.sender}")
+                return
+
+            op = content.get("op")
             response = None
 
             if op == "enable":
                 # Client 启用监控
-                level = payload.content.get("level", "INFO")
+                level = content.get("level", "INFO")
                 success = self.connection_manager.enable_monitoring(
                     envelope.sender, level
                 )
@@ -504,7 +526,7 @@ class MessageRouter:
 
             elif op == "subscribe":
                 # Monitor 订阅 Client
-                target = payload.content.get("target_client_id")
+                target = content.get("target_client_id")
                 if target:
                     success = self.connection_manager.subscribe_monitor(
                         envelope.sender, target
@@ -527,7 +549,7 @@ class MessageRouter:
 
             elif op == "unsubscribe":
                 # Monitor 取消订阅
-                target = payload.content.get("target_client_id")
+                target = content.get("target_client_id")
                 if target:
                     success = self.connection_manager.unsubscribe_monitor(
                         envelope.sender, target
@@ -556,11 +578,13 @@ class MessageRouter:
 
         elif payload.type == MonitorType.DATA:
             # 转发监控数据
-            await self.connection_manager.forward_monitor_data(
-                client_id=envelope.sender,
-                name=payload.content.get("name"),
-                data=payload.content.get("data"),
-            )
+            content = payload.content
+            if content:
+                await self.connection_manager.forward_monitor_data(
+                    client_id=envelope.sender,
+                    name=content.get("name"),
+                    data=content.get("data"),
+                )
 
     # Send
 
