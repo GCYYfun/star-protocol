@@ -20,6 +20,10 @@ from star_protocol.models.payloads import (
     MessageOutcomeContent,
     MessageEventContent,
     MessageStreamContent,
+    MessageDiscoverContent,
+    MessageSpecificationContent,
+    # Tool
+    ToolDefinition,
     # Brodcast
     BroadcastPayload,
     BroadcastEventContent,
@@ -55,11 +59,15 @@ __all__ = [
     "MessageOutcomeContent",
     "MessageEventContent",
     "MessageStreamContent",
+    "MessageDiscoverContent",
+    "MessageSpecificationContent",
     "BroadcastEventContent",
     "BroadcastStreamContent",
     "MonitorCtrlContent",
     "MonitorDataContent",
     "MonitorNotifyContent",
+    # Tool
+    "ToolDefinition",
     # Envelope
     "Envelope",
     # Utils

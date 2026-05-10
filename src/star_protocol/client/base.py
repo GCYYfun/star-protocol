@@ -206,6 +206,9 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
 
         self.logger.info(f"Joined environment: {env_id}")
 
+        # 子类钩子（如 AgentClient 自动触发 discover）
+        await self.on_joined_environment(env_id)
+
         # 监控钩子
         if self._monitorable:
             await self._on_state_change(old_state.value, self._state.state.value)
@@ -316,7 +319,12 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
         if payload.type == "error":
             await self.on_error(payload.content)
         elif payload.type == "notify":
-            self.logger.info(f"System notify: {payload.content}")
+            content = payload.content  # TypedDict → 本质是 dict
+            event = content.get("event", "") if isinstance(content, dict) else ""
+            msg = content.get("msg", "") if isinstance(content, dict) else ""
+            log_msg = msg if isinstance(msg, str) else str(msg)
+            self.logger.info(f"System notify: {event} - {log_msg}")
+            await self.on_system_notify(event, content if isinstance(content, dict) else {})
 
     async def _handle_message(self, envelope: Envelope) -> None:
         """处理业务消息 - 子类实现"""
@@ -370,6 +378,31 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
         """断开连接回调"""
         pass
 
+    async def on_joined_environment(self, env_id: str) -> None:
+        """
+        成功加入环境后的回调
+
+        Args:
+            env_id: 已加入的环境 ID
+        """
+        pass
+
+    async def on_system_notify(self, event: str, content: dict) -> None:
+        """
+        Hub 系统通知回调（子类可重写）
+
+        常见 event 值：
+            - "connected"           连接成功
+            - "joined"              加入环境成功确认
+            - "left"                离开环境确认
+            - "environment_closed"  所在环境已断开
+
+        Args:
+            event:   事件名称
+            content: 完整通知内容 dict
+        """
+        pass
+
     async def on_error(self, error: Dict[str, Any]) -> None:
         """
         错误处理回调
@@ -378,3 +411,4 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
             error: 错误信息字典
         """
         self.logger.error(f"Error: {error}")
+

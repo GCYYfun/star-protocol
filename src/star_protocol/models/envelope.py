@@ -2,7 +2,7 @@
 
 import time
 import uuid
-from typing import Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from .payloads import SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload
@@ -55,54 +55,48 @@ class Envelope(BaseModel):
     )
 
     payload: Optional[
-        Union[SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload]
+        Union[SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload, Dict[str, Any]]
     ] = Field(default=None, description="业务载荷，类型取决于 Envelope.type")
 
     @field_validator("payload", mode="before")
     @classmethod
     def validate_payload_type(cls, v, info):
-        """验证 payload 类型与 envelope type 匹配，并强制转换为正确模型"""
+        """
+        验证 payload 类型与 envelope type 匹配，并强制转换为正确模型。
+
+        容错策略：已知类型严格校验；未知 payload.type 或校验失败时 fallback
+        到原始 dict 透传，确保 Hub 路由层不会因未知协议扩展而崩溃。
+        """
         if not info.data:
             return v
-            
+
         t = info.data.get("type")
         if v is None:
             return v
 
-        # 使用 info.data.get("type") 强制进行特定的模型校验和加载
-        # 避免 Union 在有重叠 Literal (如 "event", "stream") 时匹配错误
-        # 如果 v 已经是某个模型实例，但类型不匹配 (由于 Union 自动匹配可能匹配错)，将其转回 dict 重新校验
         def get_dict(v):
             if isinstance(v, (SystemPayload, MessagePayload, BroadcastPayload, MonitorPayload)):
                 return v.model_dump()
             return v
 
-        try:
-            if t == "system":
-                return (
-                    SystemPayload.model_validate(get_dict(v))
-                    if not isinstance(v, SystemPayload)
-                    else v
-                )
-            elif t == "message":
-                return (
-                    MessagePayload.model_validate(get_dict(v))
-                    if not isinstance(v, MessagePayload)
-                    else v
-                )
-            elif t == "broadcast":
-                return (
-                    BroadcastPayload.model_validate(get_dict(v))
-                    if not isinstance(v, BroadcastPayload)
-                    else v
-                )
-            elif t == "monitor":
-                return (
-                    MonitorPayload.model_validate(get_dict(v))
-                    if not isinstance(v, MonitorPayload)
-                    else v
-                )
-        except Exception as e:
-            raise ValueError(f"{t} type validation failed: {str(e)}")
+        def try_validate(model_cls, v):
+            """尝试用指定模型校验，失败时 fallback 到原始 dict（允许协议扩展透传）"""
+            if isinstance(v, model_cls):
+                return v
+            try:
+                return model_cls.model_validate(get_dict(v))
+            except Exception:
+                # payload.type 超出当前模型定义（如协议扩展的新类型）
+                # fallback：作为 dict 透传，由目标客户端负责解析
+                return get_dict(v) if not isinstance(v, dict) else v
+
+        if t == "system":
+            return try_validate(SystemPayload, v)
+        elif t == "message":
+            return try_validate(MessagePayload, v)
+        elif t == "broadcast":
+            return try_validate(BroadcastPayload, v)
+        elif t == "monitor":
+            return try_validate(MonitorPayload, v)
 
         return v

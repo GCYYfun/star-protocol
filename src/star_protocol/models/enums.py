@@ -27,6 +27,9 @@ class MessageType(str, Enum):
     OUTCOME = "outcome"
     STREAM = "stream"
     EVENT = "event"
+    # 协议级：工具发现
+    DISCOVER = "discover"
+    SPECIFICATION = "specification"
 
 
 class BroadcastType(str, Enum):

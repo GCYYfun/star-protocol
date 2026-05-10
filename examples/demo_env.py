@@ -4,11 +4,62 @@ from rich.panel import Panel
 from rich.table import Table
 
 from star_protocol.client import EnvironmentClient
+from star_protocol.models.payloads import ToolDefinition
 
 console = Console()
 
 
+# ==================== 工具清单定义 ====================
+# 集中声明，便于 on_discover 引用
+DEMO_TOOLS: list[ToolDefinition] = [
+    {
+        "name": "greet",
+        "description": "向环境发送问候，环境将回复欢迎消息",
+        "parameters": {
+            "schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "问候语内容"},
+            },
+            "required": ["message"],
+        },
+        "tags": ["social"],
+    },
+    {
+        "name": "calculate",
+        "description": "执行基础四则运算，返回计算结果",
+        "parameters": {
+            "schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["add", "sub", "mul", "div"],
+                    "description": "运算类型",
+                },
+                "a": {"type": "number", "description": "第一个操作数"},
+                "b": {"type": "number", "description": "第二个操作数"},
+            },
+            "required": ["operation", "a", "b"],
+        },
+        "tags": ["math"],
+    },
+]
+
+
 class DemoEnvironment(EnvironmentClient):
+    async def on_discover(self, sender: str) -> list[ToolDefinition]:
+        """响应工具发现请求，返回本环境支持的工具清单"""
+        console.print(
+            f"\n[bold magenta]🔍 收到 Discover 请求[/bold magenta] 来自 [cyan]{sender}[/cyan]"
+        )
+        console.print(
+            f"[dim]   → 返回 {len(DEMO_TOOLS)} 个工具: "
+            + ", ".join(t["name"] for t in DEMO_TOOLS)
+            + "[/dim]\n"
+        )
+        return DEMO_TOOLS
+
     async def on_action(self, sender: str, content: dict):
         """覆盖接收 action 的回调并提供自定义的处理与美化打印"""
         action_name = content.get("name", "unknown")
@@ -76,8 +127,8 @@ class DemoEnvironment(EnvironmentClient):
 
         # ========== [Rich Output] 回执响应 ==========
         outcome_content = {
-            "action_id": action_id,
-            "action_name": action_name,
+            "ref_id": action_id,
+            "success": True,
             "data": reply_data,
         }
 
@@ -87,6 +138,20 @@ class DemoEnvironment(EnvironmentClient):
 
         # 将构造好的执行结果返回给发送者
         await self.send_outcome(sender, outcome_content)
+
+    async def on_client_joined(self, client_id: str):
+        """有 Agent 加入环境"""
+        console.print(
+            f"[bold green]🟢 Agent 加入[/bold green]: [cyan]{client_id}[/cyan]"
+        )
+
+    async def on_client_left(self, client_id: str, reason: str = "leave"):
+        """有 Agent 离开环境"""
+        icon = "🔴" if reason == "disconnected" else "🟡"
+        label = "断线" if reason == "disconnected" else "主动离开"
+        console.print(
+            f"[bold yellow]{icon} Agent {label}[/bold yellow]: [cyan]{client_id}[/cyan]"
+        )
 
 
 async def main():
@@ -131,6 +196,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        console.print("\n[bold red]============")
-        console.print("程序已被用户强制中断")
-        console.print("============[/bold red]")
+        console.print(
+            "\n[bold red]============\n程序已被用户强制中断\n============[/bold red]"
+        )

@@ -15,6 +15,18 @@ def gen_id(type, name):
     return f"{type}-{name}-{time_id}-{random_part}"
 
 
+# ==================== Tool Definition ====================
+
+
+class ToolDefinition(TypedDict, total=False):
+    """工具定义，由环境提供、Agent 缓存并传递给 LLM"""
+
+    name: str  # 工具名，对应 action_name
+    description: str  # 供 LLM 理解用途的描述
+    parameters: Dict[str, Any]  # JSON Schema，描述 params 结构
+    tags: list  # 可选：分组、权限标签
+
+
 # System Payload Contents
 class SystemCtrlContent(TypedDict, total=False):
     op: str
@@ -22,8 +34,15 @@ class SystemCtrlContent(TypedDict, total=False):
 
 
 class SystemNotifyContent(TypedDict, total=False):
+    """
+    系统通知内容。
+
+    event: 事件名称
+    msg:   简单文本或结构化数据（str = 可读消息， dict = 事件数据）
+    """
+
     event: str
-    msg: str
+    msg: Union[str, Dict[str, Any]]
 
 
 class SystemErrorContent(TypedDict, total=False):
@@ -69,15 +88,29 @@ class MessageStreamContent(TypedDict, total=False):
     is_end: bool
 
 
+class MessageDiscoverContent(TypedDict, total=False):
+    """discover 请求内容（可以带过滤器）"""
+
+    filter_tags: list  # 可选：按标签过滤工具
+
+
+class MessageSpecificationContent(TypedDict, total=False):
+    """specification 响应内容"""
+
+    tools: list  # list[ToolDefinition]
+
+
 class MessagePayload(BaseModel):
     """业务消息载荷"""
 
-    type: Literal["action", "outcome", "stream", "event"]
+    type: Literal["action", "outcome", "stream", "event", "discover", "specification"]
     content: Union[
         MessageActionContent,
         MessageOutcomeContent,
         MessageStreamContent,
         MessageEventContent,
+        MessageDiscoverContent,
+        MessageSpecificationContent,
         Dict[str, Any],
     ]
 

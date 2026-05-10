@@ -118,6 +118,20 @@ class MessageRouter:
                     f"Environment {client_id} closing, {len(members)} members notified"
                 )
 
+            else:
+                # 非 Environment 角色断开：通知其所在环境
+                member_env = self.connection_manager.get_client_environment(client_id)
+                if member_env:
+                    await self.send_system_message(
+                        member_env,
+                        "notify",
+                        {
+                            "event": "client_left",
+                            "msg": {"client_id": client_id, "reason": "disconnected"},
+                        },
+                    )
+                    logger.info(f"Notified {member_env}: {client_id} disconnected")
+
             await self.connection_manager.remove_session(client_id)
 
     async def route_message(self, envelope: Envelope) -> None:
@@ -133,11 +147,11 @@ class MessageRouter:
             envelope: 消息信封
         """
         # 1. 广播给 Hub Monitor（系统监控）- 仅监控非 monitor 协议消息，避免循环
-        if envelope.type != EnvelopeType.MONITOR:
+        if envelope.type != EnvelopeType.MONITOR.value:
             await self.handle_hub_monitors_message(envelope)
 
         # 2. 预处理：为缺失 ID 的 Action 或 Event 自动生成 ID
-        if envelope.type == EnvelopeType.MESSAGE:
+        if envelope.type == EnvelopeType.MESSAGE.value:
             payload = envelope.payload
             if payload and payload.type == "action":
                 content = payload.content
@@ -157,7 +171,7 @@ class MessageRouter:
                     content["id"] = gen_id("event", content.get("name", "unknown"))
 
         # 3. 记录监控：消息到达 Hub (message_received)
-        if envelope.type in [EnvelopeType.MESSAGE, EnvelopeType.BROADCAST]:
+        if envelope.type in [EnvelopeType.MESSAGE.value, EnvelopeType.BROADCAST.value]:
             await self.connection_manager.forward_monitor_data(
                 client_id=envelope.sender,
                 name="message_received",
@@ -251,6 +265,15 @@ class MessageRouter:
                             "env_id": env_id,
                         },
                     )
+                    # 通知环境有成员加入
+                    await self.send_system_message(
+                        env_id,
+                        "notify",
+                        {
+                            "event": "client_joined",
+                            "msg": {"client_id": envelope.sender},
+                        },
+                    )
                     # 记录监控事件
                     await self.connection_manager.forward_monitor_data(
                         client_id=envelope.sender,
@@ -287,6 +310,15 @@ class MessageRouter:
                             "event": "left",
                             "msg": f"Left environment {env_id}",
                             "env_id": env_id,
+                        },
+                    )
+                    # 通知环境有成员离开
+                    await self.send_system_message(
+                        env_id,
+                        "notify",
+                        {
+                            "event": "client_left",
+                            "msg": {"client_id": envelope.sender, "reason": "leave"},
                         },
                     )
                     # 记录监控事件
@@ -478,7 +510,9 @@ class MessageRouter:
             # 处理控制命令
             content = payload.content
             if content is None:
-                logger.warning(f"Received monitor ctrl message with null content from {envelope.sender}")
+                logger.warning(
+                    f"Received monitor ctrl message with null content from {envelope.sender}"
+                )
                 return
 
             op = content.get("op")
