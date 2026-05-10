@@ -284,8 +284,8 @@ class BaseClient(MonitorableMixin, ReconnectableMixin, ABC):
                     # 路由到处理器
                     await self._messaging.route_message(envelope)
 
-                except websockets.exceptions.ConnectionClosed:
-                    self.logger.warning("Connection closed")
+                except StarConnectionError as e:
+                    self.logger.warning(f"Connection closed or lost: {e}")
 
                     if self.auto_reconnect:
                         success = await self._attempt_reconnect()
