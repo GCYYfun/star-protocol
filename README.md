@@ -1,256 +1,134 @@
 # Star Protocol Python SDK
 
-一个轻量级、强类型的多智能体通信协议 Python SDK，基于 WebSocket 实现 Agent、Environment、Human 和 Monitor 之间的实时协作。
+Python SDK 0.3.0 implements the negotiated `agent-env-compact/2` application contract over Star Envelope routing. The application version is separate from the package version. This is a breaking Content/API upgrade from 0.2.0; legacy `success/ref_id` results are rejected rather than silently translated.
 
-## ✨ 特性
+Install this checkout with `uv sync`. Run the Hub with `uv run uvicorn app:create_hub_app --factory` (see `app.py`). Agent, Environment and Human clients share strict lossless parsing, explicit capability negotiation, model text input and installed runtime Event handlers. Star system, monitor and stream payloads remain available.
 
-- ✅ **类型安全**: 使用 Pydantic 模型确保消息结构正确性
-- ✅ **异步优先**: 基于 `asyncio` 和 `websockets` 的高性能实现
-- ✅ **FastAPI 集成**: 生产级 Hub Server，支持 HTTP API 和 WebSocket
-- ✅ **五种客户端**: Agent、Environment、Human、Monitor、Hub Monitor 开箱即用
-- ✅ **Monitor 功能**: 实时监控 Agent 和 Environment 的交互状态
-- ✅ **自动重连**: 内置连接管理和故障恢复
-- ✅ **易于扩展**: 支持自定义 Payload 和中间件
+## Complete protocol demo
 
-## 🚀 快速开始
-
-### 安装
+Run a real local Hub with two Agents, one Human, one Environment and one Monitor; the scenario performs assertions and exits without calling an LLM or paid service:
 
 ```bash
-pip install star-protocol
-# 或使用 uv
-uv add star-protocol
+uv run python -m examples.protocol_demo
+uv run python -m examples.protocol_demo --state-dir .demo-state --trace
+uv run python -m examples.protocol_demo --stage-delay 1 --step-delay 0.5 --wait-seconds 2
+uv run python -m examples.protocol_demo --fast
 ```
 
-### 启动 Hub Server
+The second command retains SQLite records, `transcript.jsonl` and `summary.json`. Rich output shows the operation flow by stage, identifying the active actors, operations and time, then retains a relationship tree grouping receiver capabilities, Action → Outcome, Event references, delivery recovery, Stream and Monitor. `--trace` expands message hierarchy, schemas and check details in that tree while the transcript keeps raw JSON records. Short ID aliases are display-only; full IDs remain available in trace and saved records. Rich is declared in the development dependencies and installed by `uv sync`. Editable receiver snapshots demonstrate Tool schemas, model/runtime Event declarations and local `$defs` / `$ref`. The demo covers all six Outcome statuses, bidirectional negotiation and renewed receiver snapshots, continuous actions, causal references, invalid inputs, immutable replay, instance recovery, durable delivery acknowledgements, original-envelope replay after a lost ACK, Star stream chunks and confirmed Monitor subscriptions with telemetry. See [examples/README.md](examples/README.md) for the coverage matrix, complete wire messages and separate role commands.
 
-```bash
-# 使用 CLI
-star-hub --host 0.0.0.0 --port 8765
 
-# 或使用 Python
-python -m star_protocol.cli
-```
 
-### Agent 客户端示例
+Local registration is shown before connecting: Environment tools all dispatch through `DemoEnvironment.on_action`; Agent/Human declare model Events handled by `on_event` and runtime feedback bound to `_receive_feedback`. Outcome uses the separate framework `on_outcome` callback. The default Rich view shows receiver entries, Schema field summaries, actual handler names, message direction, request parameters and text. Registration observations follow successful local configuration, and dispatch observations follow actual callback entry. Bidirectional specifications describe existing receiver behavior; receiving a remote Schema does not install functions. See the example guide for the four-step discovery exchange and each invocation path.
+
+The CLI loads `examples/protocol_demo/config/demo-timing.json` by default: `stage_delay=0.7`, `step_delay=0.3`, `wait_seconds=1.2` seconds. `--timing PATH` selects another configuration; the individual time flags override its values. Stage and step delays accept finite numbers from 0 to 10 seconds; the normally completing wait example accepts 0.05 to 3 seconds. The cancellation example independently starts a three-second wait and cancels it after actual running progress. `--fast` removes presentation pauses while keeping real waits and protocol confirmations. These settings do not simulate network latency or add protocol fields. Presentation annotations are saved as separate `flow.*` records and never sent to the Hub.
+
+## Content contracts
+
+| Payload type | Content |
+|---|---|
+| action | `id`, `name`, `params` |
+| outcome | `id`, `refs: [action_id]`, `status`, `data: {text}` |
+| event | `id`, `name`, `data`, optional ordered `refs` |
+| discover | `protocols` |
+| specification | `protocol`, `tools`, `events` |
+
+Outcome statuses are `accepted`, `running`, `completed`, `rejected`, `failed`, `cancelled`. Only the last four finish the Action. Multiple intermediate results do not resolve a final wait. Duplicate IDs preserve immutable content; conflicting IDs and contradictory terminal results raise `ProtocolConflictError`. Timeout raises `ActionTimeoutError` with local `status="unknown"`; it does not cancel remote execution or retry a write.
+
+## Agent
 
 ```python
-from star_protocol import AgentClient
-import asyncio
+from star_protocol import AgentClient, ActionTimeoutError
+from star_protocol.models import gen_id
 
 class MyAgent(AgentClient):
-    async def on_outcome(self, sender: str, content: dict):
-        print(f"收到结果: {content}")
+    async def on_specification(self, sender, content):
+        # The entire receiver snapshot is available: protocol/tools/events.
+        self.ready.set()
 
-async def main():
-    agent = MyAgent(client_id="agent_01")
-    
-    # 使用 async with 自动管理连接
-    async with agent:
-        await agent.connect("ws://localhost:8765")
-        await agent.join_environment("my_env")
-        
-        # 发送动作
-        await agent.send_action(
-            recipient="my_env",
-            action_name="move",
-            params={"x": 10, "y": 5}
-        )
-        
-        await agent.run()
+    async def on_outcome(self, sender, content):
+        print(content["status"], content["data"]["text"])
 
-asyncio.run(main())
+# Configure receiver schemas and actual runtime handlers before connecting.
+agent = MyAgent("agent")
+agent.configure_capabilities(events=[], runtime_handlers={})
+# connect/start/join_environment triggers discover and a two-way specification
+# exchange. Await your on_specification signal before sending business traffic.
+
+action_id = gen_id("action")
+# Persist {id, name, params, recipient} here, before the first send.
+await agent.send_action("env", "MOVE", {"x": 1}, action_id=action_id)
+try:
+    final = await agent.await_action(action_id, timeout=30)
+except ActionTimeoutError:
+    # Keep the original operation unresolved. After reconnect/negotiation,
+    # resend the SAME stored Action or query the environment's declared tool.
+    pass
 ```
 
-### Environment 客户端示例
+`request_action(..., action_id=..., timeout=...)` combines send and terminal wait. `restore_action(recipient, content)` registers a durable original Action before receiving its replay. Environment uses `restore_received_action(sender, content)` to hydrate its own durable binding before sending the original Outcome after restart. `action_status(id)` and `action_outcomes(id)` expose the local received record. These SDK records are in memory; the application must persist them for crash recovery.
+
+## Environment and receiver capabilities
 
 ```python
 from star_protocol import EnvironmentClient
+from star_protocol.models import gen_id
 
-class GameEnvironment(EnvironmentClient):
-    async def on_action(self, sender: str, content: dict):
-        # 处理动作
-        result = {"success": True, "position": [10, 5]}
-        await self.send_outcome(recipient=sender, content=result)
-        
-        # 广播事件
-        await self.broadcast_event("player_moved", {"player": sender})
+env = EnvironmentClient("env")
+env.configure_capabilities(tools=[{
+    "name": "MOVE", "description": "移动到坐标",
+    "parameters": {"type": "object", "properties": {"x": {"type": "integer"}},
+                   "required": ["x"], "additionalProperties": False},
+}], events=[], runtime_handlers={})
 
-async def main():
-    env = GameEnvironment(client_id="my_env")
-    
-    async with env:
-        await env.connect("ws://localhost:8765")
-        await env.run()
-
-asyncio.run(main())
+# In an overridden on_action(sender, content), durably bind the immutable Action
+# and commit world state plus its final Outcome atomically before sending it.
+await env.send_outcome("agent", {
+    "id": gen_id("outcome"), "refs": [content["id"]],
+    "status": "completed", "data": {"text": "已到达坐标1。"},
+})
 ```
 
-### Monitor 功能示例
+Override `on_discover(sender)` to return either the tool list or the entire `protocol/tools/events` snapshot. Receiving specification calls `on_specification(sender, content)` on all three business clients. Agent's default full callback bridges the old tool-only callback; overriding the full callback avoids a second callback. Agent/Human automatically discover on join; either peer replies with its configured complete snapshot. `protocol_for(peer)` is ready only after both snapshots are exchanged. Reconnect requires fresh negotiation.
 
-Monitor 可以实时监控 Agent 和 Environment 的交互：
+Each Event definition has `name`, `description`, `handler` (`model` or `runtime`), optional `data_schema`. Register runtime callbacks with `configure_capabilities(runtime_handlers={name: async_callback})`; each receives `(sender, full_content)` and dispatches once after successful handling. Declaring a runtime Event without its handler fails. Ordinary Event names use text-only model input by default; extra keys require the receiver's declared data schema. SDK does not infer group permissions or trade decisions from text.
 
-```python
-from star_protocol.client import AgentClient, MonitorClient
-from star_protocol.client.mixins.monitorable import MonitorLevel
+`send_event(..., event_id=..., refs=...)` and Human/Environment equivalents preserve caller IDs and references. `broadcast_event(..., event_id=..., refs=...)` targets the Environment's members and permits only default text data. Structured Conversation controls should be sent to each authorized, negotiated recipient. Transparent forwarding preserves Content; a new authorized projection receives a new ID.
 
-# 1. Agent 启用监控
-agent = AgentClient("agent_01", monitorable=True)
-await agent.connect("ws://localhost:8765")
-await agent.start()
-await agent.enable_monitoring(level=MonitorLevel.DEBUG)
+## Validation and responsibility
 
-# 2. Monitor 订阅 Agent
-monitor = MonitorClient("monitor_01")
-await monitor.connect("ws://localhost:8765")
-await monitor.start()
-await monitor.subscribe_to_client("agent_01")
+Wire parsing rejects missing IDs, duplicate keys, non-finite numbers, illegal Envelope/Payload combinations, unknown compact fields and limits above 512 KiB. Tool parameters and Event data use JSON Schema with FormatChecker after receiver negotiation. Receiver schemas support local `$ref`; external schema loading requires an explicit application adapter. Canonical schemas use bounded immutable validation caches. Hub binds sender to the authenticated WebSocket connection, requires both snapshots before business routing, checks Action/Outcome ownership, preserves logical IDs and does not copy private peer messages to the Environment. Transport delivery UUID is distinct from a logical Content ID.
 
-# 3. Monitor 接收数据
-class MyMonitor(MonitorClient):
-    async def on_monitor_data(self, source_client_id: str, data_type: str, data: dict):
-        print(f"监控数据 - 来源: {source_client_id}, 类型: {data_type}")
-        print(f"数据: {data}")
-```
+Durable reception/ACK, world atomicity, ledger replay ordering, authorization, retention and resolution of references to unavailable historical records remain application/connector duties. SDK validates known reference types but cannot invent inaccessible history. Conversation 2.0 handlers and an environment's Interaction rules must be implemented in the application; a remote Schema does not install behavior. Production writes require a durable operation store. The complete example in `examples/protocol_demo/` supplies an application-owned SQLite ledger for its demonstration world; it does not extend SDK guarantees to arbitrary external services.
 
-## 📚 核心概念
-
-### 五种客户端类型
-
-1. **Agent** - 智能体，执行动作并接收结果
-2. **Environment** - 环境，处理动作并返回结果，管理环境状态
-3. **Human** - 人类用户，可以观察和参与交互
-4. **Monitor** - 业务监控，实时监听特定客户端的通讯状态和消息
-5. **Hub Monitor** - 系统监控，监听 Hub 上的所有系统与业务消息
-
-### 消息类型
-
-- **Action** - Agent 发送给 Environment 的动作
-- **Outcome** - Environment 返回给 Agent 的结果
-- **Event** - Environment 广播的事件
-- **Stream** - Environment 发送的流式数据
-- **Monitor** - 监控相关的控制和数据消息
-
-### 环境管理
-
-- Environment 自动创建和销毁
-- Agent 通过 `join_environment()` 加入环境
-- 环境内的消息自动路由
-- Environment 自动接收环境内所有消息的副本
-
-## 📁 项目结构
-
-```
-star_protocol/
-├── models/              # 数据模型
-│   ├── enums.py        # 枚举类型
-│   ├── payloads.py     # 消息载荷
-│   └── envelope.py     # 消息信封
-├── client/              # 客户端
-│   ├── base.py         # 基础客户端
-│   ├── agent.py        # Agent 客户端
-│   ├── environment.py  # Environment 客户端
-│   ├── human.py        # Human 客户端
-│   ├── monitor.py      # Monitor 客户端
-│   ├── core/           # 核心模块
-│   └── mixins/         # Mixin 功能
-├── server/              # Hub Server
-│   ├── app.py          # FastAPI 应用
-│   ├── router.py       # 消息路由
-│   ├── connection.py   # 连接管理
-│   └── monitor_manager.py  # 监控管理
-├── exceptions.py        # 自定义异常
-└── cli.py              # 命令行工具
-```
-
-## 📖 文档
-
-- [协议规范](docs/SP.md) - 完整的协议交互定义
-- [快速入门指南](docs/quickstart.md) - 了解 SDK 基础概念及起步流程
-- [API 参考](docs/api_reference.md) - 接口参数与核心类说明
-
-## 💡 示例
-
-查看 `examples/` 目录获取更多示例：
-
-- [`demo_agent.py`](examples/demo_agent.py) - Agent 客户端功能演示
-- [`demo_env.py`](examples/demo_env.py) - Environment 客户端功能演示
-- [`demo_human.py`](examples/demo_human.py) - Human 客户端功能演示
-- [`demo_monitor.py`](examples/demo_monitor.py) - 独立 Monitor 客户端及 Hub Monitor 功能演示
-- [`INTERACTIVE_DEMO.md`](examples/INTERACTIVE_DEMO.md) - 多智能体完整交互情景演示指南
-
-### 运行示例
+## Tests
 
 ```bash
-# 1. 启动 Hub Server
-uv run python -m star_protocol.cli
-
-# 2. 在其他终端分别运行客户端示例代码进行联动测试
-uv run examples/demo_env.py
-uv run examples/demo_agent.py
-uv run examples/demo_monitor.py
+uv run pytest tests -q
 ```
 
-## 🔧 开发
+Tests cover strict roundtrip, schema/size failures, progress before terminal, identity reuse, late timeout recovery, exact runtime dispatch, full bidirectional discovery over real WebSocket connections, Hub ownership and source authentication.
 
-### 环境设置
 
-```bash
-# 克隆仓库
-git clone https://github.com/your-org/star-protocol
-cd star-protocol
+## Durable connector delivery
 
-# 安装依赖
-uv sync
+Persist and validate the complete received Envelope before calling
+`send_delivery_ack(original_sender, envelope.id)`. This sends authenticated
+`system.notify` with `event=VILLAGE_DELIVERY_ACK` and
+`msg={envelope_id: <transport UUID>}`. An Environment overrides
+`on_delivery_ack(sender, envelope_id)` to check its recorded expected receiver
+and remove that delivery from its durable queue. Sending over WebSocket alone
+does not prove durable reception. The SDK does not invent a connector database;
+applications own persistence, original-envelope replay, and retry order.
 
-# 运行测试
-uv run pytest
-
-# 启动 Hub
-uv run python -m star_protocol.cli
-```
-
-### 运行测试
-
-```bash
-# 运行所有测试
-uv run pytest
-
-# 运行特定测试
-uv run pytest tests/models/
-
-# 查看覆盖率
-uv run pytest --cov=star_protocol
-```
-
-## 🎯 使用场景
-
-### 多智能体系统
-- 多个 Agent 在共享环境中协作
-- Environment 管理状态和规则
-- Monitor 实时监控系统运行
-
-### 游戏开发
-- Agent 作为游戏 AI
-- Environment 作为游戏世界
-- Human 作为玩家
-- Monitor 用于调试和分析
-
-### 仿真系统
-- Agent 作为仿真实体
-- Environment 作为仿真环境
-- Monitor 收集仿真数据
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 License
-
-MIT License
-
-## 🔗 相关链接
-
-- [GitHub 仓库](https://github.com/your-org/star-protocol-python)
-- [问题反馈](https://github.com/your-org/star-protocol-python/issues)
-- [协议规范](docs/SP.md)
+Application callbacks are deduplicated only after successful completion. If an
+Outcome or Event callback fails before durable storage, replaying the same
+immutable logical ID invokes it again. Explicit Action replay still reaches the
+Environment ledger so it can return its saved original Outcomes.
+The default `EnvironmentClient.on_action` rejects missing business handlers and
+replays that original rejection from memory on retry. Subclasses overriding
+`on_action` must implement their own execution/replay ledger; the SDK deliberately
+does not skip that callback based on its in-memory result history. Persist writes
+and original results atomically before sending them, including intermediate
+Outcomes for asynchronous actions. The complete demo supplies a persistent application ledger and preserves original
+results for its local demonstration operations; see `examples/README.md`.

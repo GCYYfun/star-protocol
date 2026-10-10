@@ -2,6 +2,9 @@
 
 import logging
 import time
+import uuid
+from star_protocol.models.payloads import validate_schema_instance
+from star_protocol.models.payloads import COMPACT_PROTOCOL, validate_compact_content
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from star_protocol.server.connection import SessionManager, ClientRole
@@ -34,6 +37,8 @@ class MessageRouter:
         self.connection_manager = SessionManager(max_connections)
         self.heartbeat_interval = heartbeat_interval
         self.start_time = time.time()
+        self._peer_specifications = {}
+        self._action_owners = {}
 
     async def start(self) -> None:
         """启动路由器"""
@@ -86,7 +91,14 @@ class MessageRouter:
             while True:
                 # 接收消息
                 data = await websocket.receive_text()
-                envelope = Envelope.model_validate_json(data)
+                try:
+                    envelope = Envelope.model_validate_json(data)
+                except (ValueError, TypeError) as error:
+                    await self.send_error(client_id, 400, str(error), str(uuid.uuid4()))
+                    continue
+                if envelope.sender != client_id:
+                    await self.send_error(client_id, 403, "Envelope sender differs from authenticated connection", envelope.id)
+                    continue
 
                 logger.debug(f"Received from {client_id}: {envelope.type}")
 
@@ -132,6 +144,7 @@ class MessageRouter:
                     )
                     logger.info(f"Notified {member_env}: {client_id} disconnected")
 
+            self._peer_specifications = {key: value for key, value in self._peer_specifications.items() if client_id not in key}
             await self.connection_manager.remove_session(client_id)
 
     async def route_message(self, envelope: Envelope) -> None:
@@ -146,29 +159,17 @@ class MessageRouter:
         Args:
             envelope: 消息信封
         """
-        # 1. 广播给 Hub Monitor（系统监控）- 仅监控非 monitor 协议消息，避免循环
+        # Revalidate even programmatically supplied/mutated models. Missing
+        # logical IDs are rejected, never invented by the Hub on each retry.
+        try:
+            envelope = Envelope.model_validate(envelope.model_dump())
+            self._validate_compact_route(envelope)
+        except Exception as error:
+            await self.send_error(envelope.sender, 400, str(error), envelope.id)
+            return
+
         if envelope.type != EnvelopeType.MONITOR.value:
             await self.handle_hub_monitors_message(envelope)
-
-        # 2. 预处理：为缺失 ID 的 Action 或 Event 自动生成 ID
-        if envelope.type == EnvelopeType.MESSAGE.value:
-            payload = envelope.payload
-            if payload and payload.type == "action":
-                content = payload.content
-                if content is None:
-                    logger.warning(f"Action content is None from {envelope.sender}")
-                elif not hasattr(content, "get"):
-                    logger.error(f"Action content has no 'get' attribute: {content}")
-                elif not content.get("id"):
-                    content["id"] = gen_id("action", content.get("name", "unknown"))
-            elif payload and payload.type == "event":
-                content = payload.content
-                if content is None:
-                    logger.warning(f"Event content is None from {envelope.sender}")
-                elif not hasattr(content, "get"):
-                    logger.error(f"Event content has no 'get' attribute: {content}")
-                elif not content.get("id"):
-                    content["id"] = gen_id("event", content.get("name", "unknown"))
 
         # 3. 记录监控：消息到达 Hub (message_received)
         if envelope.type in [EnvelopeType.MESSAGE.value, EnvelopeType.BROADCAST.value]:
@@ -187,6 +188,65 @@ class MessageRouter:
             await self.handle_broadcast_message(envelope)
         elif envelope.type == EnvelopeType.MONITOR:
             await self.handle_monitor_message(envelope)
+
+    def _validate_compact_route(self, envelope: Envelope) -> None:
+        if envelope.type not in ("message", "broadcast"):
+            return
+        kind, content = envelope.payload.type, envelope.payload.content
+        sender, recipient = envelope.sender, envelope.recipient
+        if envelope.type == "message":
+            source_session = self.connection_manager.get_session(sender)
+            target_session = self.connection_manager.get_session(recipient)
+            if not source_session or not target_session:
+                raise ValueError("Business peers must have active authenticated sessions")
+            source_environment = sender if source_session.role == ClientRole.ENVIRONMENT else self.connection_manager.get_client_environment(sender)
+            target_environment = recipient if target_session.role == ClientRole.ENVIRONMENT else self.connection_manager.get_client_environment(recipient)
+            if not source_environment or source_environment != target_environment:
+                raise ValueError("Business peers must belong to the same environment")
+        if kind == "stream":
+            return
+        if kind == "discover":
+            self._peer_specifications.pop((sender, recipient), None)
+            self._peer_specifications.pop((recipient, sender), None)
+            return
+        if kind == "specification":
+            if content["protocol"] != COMPACT_PROTOCOL:
+                raise ValueError("Unsupported application contract")
+            self._peer_specifications[(sender, recipient)] = content
+            return
+        if envelope.type == "broadcast":
+            sender_session = self.connection_manager.get_session(sender)
+            environment = sender if sender_session and sender_session.role == ClientRole.ENVIRONMENT else self.connection_manager.get_client_environment(sender)
+            if recipient != "@env" or not environment:
+                raise ValueError("Compact broadcasts are confined to the sender's environment")
+            for member in self.connection_manager.get_environment_members(environment):
+                if member == sender:
+                    continue
+                self._validate_peer_contract(sender, member, kind, content)
+            return
+        self._validate_peer_contract(sender, recipient, kind, content)
+        if kind == "action":
+            previous = self._action_owners.get(content["id"])
+            binding = (sender, recipient, content)
+            if previous and previous != binding:
+                raise ValueError("Action ID conflicts with an existing owner/target/content")
+            self._action_owners[content["id"]] = binding
+        elif kind == "outcome":
+            action = self._action_owners.get(content["refs"][0])
+            if action and action[:2] != (recipient, sender):
+                raise ValueError("Outcome must target the original Action owner")
+
+    def _validate_peer_contract(self, sender, recipient, kind, content):
+        source = self._peer_specifications.get((sender, recipient))
+        target = self._peer_specifications.get((recipient, sender))
+        if not source or not target or source["protocol"] != target["protocol"]:
+            raise ValueError("Both peers must negotiate the application contract before business messages")
+        validate_compact_content(kind, content, target["events"])
+        if kind == "action":
+            tool = next((item for item in target["tools"] if item["name"] == content["name"]), None)
+            if tool is None:
+                raise ValueError("Action names an undeclared tool")
+            validate_schema_instance(tool["parameters"],content["params"])
 
     async def handle_hub_monitors_message(self, envelope: Envelope) -> None:
         """
@@ -220,6 +280,25 @@ class MessageRouter:
             envelope: 消息信封
         """
         payload = envelope.payload
+
+        if payload.type == "notify" and payload.content.get("event") == "VILLAGE_DELIVERY_ACK":
+            source = self.connection_manager.get_session(envelope.sender)
+            target = self.connection_manager.get_session(envelope.recipient)
+            msg = payload.content.get("msg")
+            try:
+                if not source or not target or target.role != ClientRole.ENVIRONMENT:
+                    raise ValueError("Delivery ACK must target an active Environment")
+                if self.connection_manager.get_client_environment(envelope.sender) != envelope.recipient:
+                    raise ValueError("Delivery ACK sender is outside the target Environment")
+                if not isinstance(msg, dict) or set(msg) != {"envelope_id"}:
+                    raise ValueError("Invalid delivery ACK body")
+                uuid.UUID(msg["envelope_id"])
+            except (ValueError, TypeError, AttributeError) as error:
+                await self.send_error(envelope.sender, 403, str(error), envelope.id)
+                return
+            await self.send_message(envelope, from_client=True)
+            return
+
 
         if payload.type == "ctrl":
             content = payload.content
@@ -271,7 +350,7 @@ class MessageRouter:
                         "notify",
                         {
                             "event": "client_joined",
-                            "msg": {"client_id": envelope.sender},
+                            "msg": {"client_id": envelope.sender,"role": self.connection_manager.get_session(envelope.sender).role.value},
                         },
                     )
                     # 记录监控事件
@@ -418,26 +497,6 @@ class MessageRouter:
         # 转发消息给接收者（来自客户端，不重复监控）
         await self.send_message(envelope, from_client=True)
 
-        # 抄送给 Environment（仅 Agent/Human 之间的消息需要抄送）
-        # Environment 发送的消息不需要抄送
-        if sender_session.role != ClientRole.ENVIRONMENT:
-            sender_env = self.connection_manager.get_client_environment(envelope.sender)
-            if (
-                sender_env
-                and sender_env != envelope.sender
-                and sender_env != envelope.recipient
-            ):
-                env_envelope = Envelope(
-                    id=envelope.id,
-                    timestamp=envelope.timestamp,
-                    type=envelope.type,
-                    sender=envelope.sender,
-                    recipient=sender_env,
-                    payload=envelope.payload,
-                )
-                await self.send_message(
-                    env_envelope, from_client=True
-                )  # 转发，不重复监控
 
     async def handle_broadcast_message(self, envelope: Envelope) -> None:
         """
@@ -505,6 +564,7 @@ class MessageRouter:
         """
 
         payload = envelope.payload
+
 
         if payload.type == MonitorType.CTRL:
             # 处理控制命令

@@ -18,7 +18,7 @@ def test_system_payload_creation():
 
 def test_message_payload_creation():
     """测试业务消息载荷创建"""
-    payload = MessagePayload(type="action", content={"name": "move", "x": 10, "y": 5})
+    payload = MessagePayload(type="action", content={"id": "move-1", "name": "move", "params": {"x": 10, "y": 5}})
     assert payload.type == "action"
     assert payload.content["name"] == "move"
 
@@ -26,7 +26,7 @@ def test_message_payload_creation():
 def test_broadcast_payload_creation():
     """测试广播消息载荷创建"""
     payload = BroadcastPayload(
-        type="event", content={"name": "night_fall", "vision_modifier": 0.5}
+        type="event", content={"id": "night-1", "name": "night_fall", "data": {"text": "天黑了"}}
     )
     assert payload.type == "event"
     assert payload.content["name"] == "night_fall"
@@ -56,7 +56,7 @@ def test_envelope_with_message_payload():
         sender="agent_01",
         recipient="env_main",
         payload=MessagePayload(
-            type="action", content={"name": "move", "x": 10, "y": 5}
+            type="action", content={"id": "move-1", "name": "move", "params": {"x": 10, "y": 5}}
         ),
     )
 
@@ -70,7 +70,7 @@ def test_envelope_with_broadcast_payload():
         type="broadcast",
         sender="env_main",
         recipient="@all",
-        payload=BroadcastPayload(type="event", content={"name": "time_tick"}),
+        payload=BroadcastPayload(type="event", content={"id": "tick-1", "name": "time_tick", "data": {"text": "时间推进"}}),
     )
 
     assert envelope.type == "broadcast"
@@ -84,7 +84,7 @@ def test_envelope_json_serialization():
         sender="agent_01",
         recipient="env_main",
         payload=MessagePayload(
-            type="action", content={"name": "move", "x": 10, "y": 5}
+            type="action", content={"id": "move-1", "name": "move", "params": {"x": 10, "y": 5}}
         ),
     )
 
@@ -125,12 +125,16 @@ def test_payload_type_validation():
     SystemPayload(type="ctrl", content={})
     SystemPayload(type="notify", content={})
 
-    MessagePayload(type="action", content={})
-    MessagePayload(type="outcome", content={})
+    with pytest.raises(ValueError):
+        MessagePayload(type="action", content={})
+    with pytest.raises(ValueError):
+        MessagePayload(type="outcome", content={})
     MessagePayload(type="stream", content={})
-    MessagePayload(type="event", content={})
+    with pytest.raises(ValueError):
+        MessagePayload(type="event", content={})
 
-    BroadcastPayload(type="event", content={})
+    with pytest.raises(ValueError):
+        BroadcastPayload(type="event", content={})
     BroadcastPayload(type="stream", content={})
 
     # 错误的类型会在运行时被 Pydantic 捕获
@@ -153,7 +157,7 @@ def test_envelope_discriminator():
 
     # message 类型必须配 MessagePayload
     envelope_dict["type"] = "message"
-    envelope_dict["payload"]["type"] = "action"
+    envelope_dict["payload"] = {"type": "action", "content": {"id": "a", "name": "LOOK", "params": {}}}
 
     envelope = Envelope.model_validate(envelope_dict)
     assert isinstance(envelope.payload, MessagePayload)

@@ -1,0 +1,57 @@
+{
+  "protocol": "agent-env-compact/2",
+  "tools": [],
+  "events": [
+    {
+      "name": "observation",
+      "description": "环境主动提供的自然语言观察；默认 data 只有 text。",
+      "handler": "model"
+    },
+    {
+      "name": "speech",
+      "description": "来自其他主体的自然语言发言；默认 data 只有 text。",
+      "handler": "model"
+    },
+    {
+      "name": "interaction.feedback",
+      "description": "触觉反馈输入；运行时处理 channel、intensity，text 同时提供可读语义。Schema 用本地 $defs / $ref 复用约束。",
+      "handler": "runtime",
+      "data_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "intensity": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "type": "object",
+        "properties": {
+          "text": {
+            "$ref": "#/$defs/text"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "haptic"
+            ]
+          },
+          "intensity": {
+            "$ref": "#/$defs/intensity"
+          }
+        },
+        "required": [
+          "text",
+          "channel",
+          "intensity"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

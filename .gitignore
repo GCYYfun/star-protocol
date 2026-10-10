@@ -9,4 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .pytest_cache
-tests/
+
+# Protocol demo durable state
+.demo-state/

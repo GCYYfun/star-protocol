@@ -1,109 +1,50 @@
-"""
-Monitor Client 示例
-
-此示例展示如何创建一个独立的 Monitor Client，用于监控其他 Client（如 Agent）的活动。
-"""
+"""Standalone Monitor: subscribe through Hub and display received telemetry trees."""
 
 import asyncio
-import logging
+
 from rich.console import Console
-from rich.table import Table
-from rich.live import Live
-from star_protocol.client.monitor import MonitorClient
+from rich.text import Text
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-console = Console()
+from examples.protocol_demo.client_cli import DemoArgumentParser
+from examples.protocol_demo.display import ProtocolDisplay
+from examples.protocol_demo.monitor import DemoMonitor
 
 
-class DemoMonitor(MonitorClient):
-    """自定义 Monitor Client"""
+async def run(hub: str, target: str, *, trace=False):
+    console = Console()
+    with ProtocolDisplay(trace=trace, console=console, title="Star Protocol · Monitor",
+                         live=False) as display:
+        def emit(record: dict):
+            display.emit({"component": "monitor", "event": f"monitor.{record['name']}",
+                          "source": record["source"], "name": record["name"],
+                          "data": record["data"]})
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.events = []
-
-    async def on_monitor_data(self, source_client_id: str, data_type: str, data: dict):
-        """处理监控数据"""
-        event = {
-            "source": source_client_id,
-            "type": data_type,
-            "data": data,
-            "timestamp": asyncio.get_event_loop().time(),
-        }
-        self.events.append(event)
-
-        # 打印事件
-        self._print_event(event)
-
-    def _print_event(self, event):
-        """打印事件详情"""
-        grid = Table.grid(expand=True)
-        grid.add_column()
-        grid.add_column(justify="right")
-
-        header = Table.grid(expand=True)
-        header.add_column()
-        header.add_column(justify="right")
-        header.add_row(
-            f"[bold cyan]SOURCE:[/bold cyan] {event['source']}",
-            f"[dim]{event['timestamp']:.2f}[/dim]",
-        )
-
-        grid.add_row(header)
-        grid.add_row(f"[bold yellow]TYPE:[/bold yellow]   {event['type']}")
-        grid.add_row(f"[bold green]DATA:[/bold green]   {event['data']}")
-
-        console.print(
-            Panel(
-                grid,
-                title="[bold magenta]Monitor Event[/bold magenta]",
-                border_style="cyan",
-            )
-        )
+        monitor = DemoMonitor(emit=emit)
+        try:
+            await monitor.connect(hub)
+            await monitor.start()
+            await monitor.subscribe_to_client(target)
+            await monitor.ready(target)
+            display.message(f"Hub 已确认订阅 {target}，等待监控数据；按 Ctrl+C 退出。", style="green")
+            await asyncio.Event().wait()
+        finally:
+            await monitor.stop()
 
 
-async def main():
-    hub_url = "ws://localhost:8000"
-    target_client_id = "auto"  # 要监控的 ID
-
-    console.print(f"[bold]启动 Monitor Client...[/bold]")
-    console.print(f"目标 Hub: {hub_url}")
-    console.print(f"监控目标: {target_client_id}")
-
-    # 创建 Monitor
-    monitor = DemoMonitor(monitor_id="monitor_client_01")
-
+def main():
+    parser = DemoArgumentParser(description=__doc__)
+    parser.add_argument("--hub", default="ws://127.0.0.1:8765", help="Hub WebSocket URL")
+    parser.add_argument("--target", default="demo_agent", help="要订阅的 Client ID")
+    parser.add_argument("--trace", action="store_true", help="展开完整监控字段树")
+    args = parser.parse_args()
     try:
-        # 连接
-        await monitor.connect(hub_url)
-        console.print("[green]✅ 已连接到 Hub[/green]")
-
-        # 启动
-        await monitor.start()
-        console.print("[green]✅ Monitor 已启动[/green]")
-
-        # 订阅
-        await monitor.subscribe_to_client(target_client_id)
-        console.print(f"[green]✅ 已订阅 Client: {target_client_id}[/green]")
-
-        console.print("\n[yellow]正在等待监控数据 (按 Ctrl+C 退出)...[/yellow]\n")
-
-        # 保持运行
-        await asyncio.Event().wait()
-
-    except Exception as e:
-        console.print(f"[red]发生错误: {e}[/red]")
-    finally:
-        # 清理
-        await monitor.stop()
-        console.print("[yellow]Monitor 已停止[/yellow]")
+        asyncio.run(run(args.hub, args.target, trace=args.trace))
+    except KeyboardInterrupt:
+        Console().print(Text("Monitor 已停止。", style="cyan"))
+    except Exception as error:
+        Console().print(Text(f"Monitor 启动或连接失败：{error}", style="red"))
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
-    from rich.panel import Panel
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        console.print("\n[bold]程序已退出[/bold]")
+    main()

@@ -49,6 +49,7 @@ class AgentClient(BaseClient):
         self._tools: List[ToolDefinition] = []
 
         # 环境生命周期管理
+        self._joining_tasks = set()
         self._pending_env: Optional[str] = None          # 正在尝试加入的环境 ID
         self._join_confirmed = asyncio.Event()            # Hub 确认 join 成功
         self._join_failed = asyncio.Event()               # Hub 返回 join 失败 (404)
@@ -81,7 +82,31 @@ class AgentClient(BaseClient):
             f"Auto-rejoin enabled (timeout={timeout}s, interval={retry_interval}s)"
         )
 
-    async def join_with_retry(
+    async def stop(self) -> None:
+        self._auto_rejoin = False
+        current=asyncio.current_task()
+        tasks=set(self._joining_tasks)
+        if self._rejoin_task is not None:
+            tasks.add(self._rejoin_task)
+        self._rejoin_task=None
+        tasks.discard(current)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks,return_exceptions=True)
+        await super().stop()
+
+    async def join_with_retry(self,env_id: str,timeout: float=30.0,retry_interval: float=2.0) -> None:
+        """Join with confirmed responses; stop cancels its pending waiters."""
+        task=asyncio.current_task()
+        self._joining_tasks.add(task)
+        try:
+            await self._join_with_retry(env_id,timeout,retry_interval)
+        finally:
+            self._joining_tasks.discard(task)
+
+    async def _join_with_retry(
         self,
         env_id: str,
         timeout: float = 30.0,
@@ -141,19 +166,17 @@ class AgentClient(BaseClient):
 
             # 等待 Hub 响应（confirmed / failed / timeout）
             wait_secs = min(retry_interval, max(0, deadline - time.monotonic()))
+            waiters = [asyncio.create_task(self._join_confirmed.wait()),
+                       asyncio.create_task(self._join_failed.wait())]
             try:
-                done, _ = await asyncio.wait(
-                    [
-                        asyncio.ensure_future(self._join_confirmed.wait()),
-                        asyncio.ensure_future(self._join_failed.wait()),
-                    ],
-                    timeout=wait_secs,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-            except Exception:
-                done = set()
-
-            self._pending_env = None
+                await asyncio.wait(waiters,timeout=wait_secs,
+                                   return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for waiter in waiters:
+                    if not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(*waiters,return_exceptions=True)
+                self._pending_env = None
 
             if self._join_confirmed.is_set():
                 # Hub 已确认，更新本地状态
@@ -247,13 +270,7 @@ class AgentClient(BaseClient):
 
     async def _discover(self, env_id: str) -> None:
         """内部：向环境发送 discover 请求"""
-        envelope = Envelope(
-            type="message",
-            sender=self.client_id,
-            recipient=env_id,
-            payload=MessagePayload(type="discover", content={}),
-        )
-        await self.send(envelope)
+        await self.send_discover(env_id)
         self.logger.info(f"Discover sent -> {env_id}")
 
     async def rediscover(self) -> None:
@@ -275,7 +292,8 @@ class AgentClient(BaseClient):
     # ------------------------------------------------------------------
 
     async def send_action(
-        self, recipient: str, action_name: str, params: Optional[Dict[str, Any]] = None
+        self, recipient: str, action_name: str, params: Optional[Dict[str, Any]] = None,
+        *, action_id: str,
     ) -> str:
         """
         发送动作到环境
@@ -285,7 +303,6 @@ class AgentClient(BaseClient):
             action_name: 动作名称
             params: 动作参数
         """
-        action_id = gen_id("action", action_name)
         content = {"id": action_id, "name": action_name, "params": params or {}}
         envelope = Envelope(
             type="message",
@@ -305,12 +322,14 @@ class AgentClient(BaseClient):
         recipient: str,
         event_name: str,
         data: Dict[str, Any] | None = None,
+        *, event_id: str, refs: list[str] | None = None,
     ) -> str:
         """向指定 recipient 发送事件消息，遵循 name 和 data 标准包。"""
 
         data = data or {}
-        event_id = gen_id("event", event_name)
         content = {"id": event_id, "name": event_name, "data": data}
+        if refs is not None:
+            content["refs"] = refs
         envelope = Envelope(
             type="message",
             sender=self.client_id,
@@ -361,13 +380,6 @@ class AgentClient(BaseClient):
             await self.on_event(envelope.sender, payload.content)
         elif payload.type == "stream":
             await self.on_stream(envelope.sender, payload.content)
-        elif payload.type == "specification":
-            tools: List[ToolDefinition] = payload.content.get("tools", [])
-            self._tools = tools
-            self.logger.info(
-                f"Tool specification received from {envelope.sender}: {len(tools)} tool(s)"
-            )
-            await self.on_tool_specification(envelope.sender, tools)
 
     async def on_broadcast(self, envelope: Envelope) -> None:
         """处理广播消息"""
@@ -419,6 +431,11 @@ class AgentClient(BaseClient):
             content: 数据内容
         """
         self.logger.debug(f"Received stream from {sender}: {content}")
+
+    async def on_specification(self, sender: str, content: Dict[str, Any]) -> None:
+        """Full capabilities callback; legacy tool-only override is a bridge."""
+        self._tools = content["tools"]
+        await self.on_tool_specification(sender, self._tools)
 
     async def on_tool_specification(
         self, sender: str, tools: List[ToolDefinition]

@@ -505,26 +505,26 @@ class SessionManager:
         if client_id not in self._subscriptions:
             return
 
-        # 构建转发消息
-        envelope = Envelope(
-            type=EnvelopeType.MONITOR,
-            sender=client_id,  # 保持原始客户端 ID
-            recipient="",  # 稍后填充
-            payload=MonitorPayload(
-                type=MonitorType.DATA,
-                content={
-                    "name": name,
-                    "data": data,
-                    "timestamp": int(time.time() * 1000),
-                },
-            ),
+        payload = MonitorPayload(
+            type=MonitorType.DATA,
+            content={
+                "name": name,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            },
         )
 
-        # 转发给所有订阅的 Monitor
-        for monitor_id in self._subscriptions[client_id]:
+        # Each forwarded delivery is a complete Envelope with its actual target.
+        # An empty placeholder recipient violates the strict Envelope contract.
+        for monitor_id in self._subscriptions[client_id].copy():
             session = self.get_session(monitor_id)
             if session and session.role == ClientRole.MONITOR:
-                envelope.recipient = monitor_id
+                envelope = Envelope(
+                    type=EnvelopeType.MONITOR,
+                    sender=client_id,
+                    recipient=monitor_id,
+                    payload=payload,
+                )
                 try:
                     await session.websocket.send_text(envelope.model_dump_json())
                     logger.debug(f"Forwarded {name} from {client_id} to {monitor_id}")

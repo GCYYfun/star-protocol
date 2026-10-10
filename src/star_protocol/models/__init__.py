@@ -24,6 +24,10 @@ from star_protocol.models.payloads import (
     MessageSpecificationContent,
     # Tool
     ToolDefinition,
+    EventDefinition,
+    COMPACT_PROTOCOL,
+    TERMINAL_STATUSES,
+    validate_compact_content,
     # Brodcast
     BroadcastPayload,
     BroadcastEventContent,
@@ -68,6 +72,10 @@ __all__ = [
     "MonitorNotifyContent",
     # Tool
     "ToolDefinition",
+    "EventDefinition",
+    "COMPACT_PROTOCOL",
+    "TERMINAL_STATUSES",
+    "validate_compact_content",
     # Envelope
     "Envelope",
     # Utils

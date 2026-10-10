@@ -1,0 +1,160 @@
+{
+  "protocol": "agent-env-compact/2",
+  "tools": [
+    {
+      "name": "observe",
+      "description": "观察环境灯光和正在执行的操作。只读取环境，不产生外部修改。",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_light",
+      "description": "设置环境灯光开关。环境只允许通过 Hub 身份验证的 Agent 执行；Human 调用被拒绝。",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "执行四则运算；除数为零时返回 failed Outcome，原因用自然语言说明。",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "add",
+              "sub",
+              "mul",
+              "div"
+            ]
+          },
+          "a": {
+            "type": "number"
+          },
+          "b": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation",
+          "a",
+          "b"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wait",
+      "description": "持续等待，依次返回 accepted、running 和 completed；取消后返回 cancelled。",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 3
+          }
+        },
+        "required": [
+          "seconds"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "continuous"
+      ]
+    },
+    {
+      "name": "cancel",
+      "description": "取消本人发起、尚未结束的 wait。action_id 是工具参数中的被取消操作 ID；该工具自身有独立的 Action ID 和 Outcome。",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_operation_result",
+      "description": "查询本人发起的操作，并重发原始 Outcome；查询动作另有自己的 Outcome。",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "speech",
+      "description": "Agent 或 Human 发送的自然语言发言；默认 data 只有 text。",
+      "handler": "model"
+    },
+    {
+      "name": "activity.state",
+      "description": "Agent 通知环境自己的活动状态；运行时按 Schema 验证并更新展示。",
+      "handler": "runtime",
+      "data_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "working",
+              "listening"
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "state"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

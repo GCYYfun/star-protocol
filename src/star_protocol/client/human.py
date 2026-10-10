@@ -68,7 +68,8 @@ class HumanClient(BaseClient):
     #     self.logger.info(f"Sent message -> {recipient}")
 
     async def send_event(
-        self, recipient: str, event_name: str, event_data: Dict[str, Any]
+        self, recipient: str, event_name: str, event_data: Dict[str, Any],
+        *, event_id: str, refs: list[str] | None = None,
     ) -> None:
         """
         发送点对点事件给其他客户端
@@ -78,20 +79,18 @@ class HumanClient(BaseClient):
             event_name: 事件名称
             event_data: 事件的具体参数与数据
         """
-        envelope = Envelope(
-            type="message",
-            sender=self.client_id,
-            recipient=recipient,
-            payload=MessagePayload(
-                type="event", content={"name": event_name, "data": event_data}
-            ),
-        )
+        content = {"id": event_id, "name": event_name, "data": event_data}
+        if refs is not None:
+            content["refs"] = refs
+        envelope = Envelope(type="message", sender=self.client_id, recipient=recipient,
+                            payload=MessagePayload(type="event", content=content))
 
         await self.send(envelope)
         self.logger.info(f"Sent event: {event_name} -> {recipient}")
 
     async def send_action(
-        self, recipient: str, action_name: str, params: Optional[Dict[str, Any]] = None
+        self, recipient: str, action_name: str, params: Optional[Dict[str, Any]] = None,
+        *, action_id: str,
     ) -> None:
         """
         发送动作（类似 Agent）
@@ -101,7 +100,7 @@ class HumanClient(BaseClient):
             action_name: 动作名称
             params: 动作参数
         """
-        content = {"name": action_name, "params": params or {}}
+        content = {"id": action_id, "name": action_name, "params": params or {}}
 
         envelope = Envelope(
             type="message",
@@ -112,6 +111,9 @@ class HumanClient(BaseClient):
 
         await self.send(envelope)
         self.logger.info(f"Sent action: {action_name} -> {recipient}")
+
+    async def on_joined_environment(self, env_id: str) -> None:
+        await self.send_discover(env_id)
 
     async def on_message(self, envelope: Envelope) -> None:
         """处理业务消息"""

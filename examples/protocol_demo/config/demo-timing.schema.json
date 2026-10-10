@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:star-protocol:demo:timing",
+  "title": "Local demo presentation timing",
+  "description": "Durations in seconds for this demonstration only; not part of protocol specification or negotiation.",
+  "type": "object",
+  "properties": {
+    "stage_delay": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Pause before each demonstration stage."
+    },
+    "step_delay": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Pause between semantic demonstration steps."
+    },
+    "wait_seconds": {
+      "type": "number",
+      "minimum": 0.05,
+      "maximum": 3,
+      "description": "Duration passed to the actual demo wait tool."
+    }
+  },
+  "required": [
+    "stage_delay",
+    "step_delay",
+    "wait_seconds"
+  ],
+  "additionalProperties": false
+}

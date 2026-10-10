@@ -5,9 +5,11 @@ A lightweight, strongly-typed communication protocol for Multi-Agent Systems (MA
 over WebSocket, supporting Agent, Environment, and Human collaboration.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from star_protocol.models.envelope import Envelope
+from star_protocol.models.payloads import COMPACT_PROTOCOL, TERMINAL_STATUSES, validate_compact_content
+from star_protocol.client.compact import ActionTimeoutError, ProtocolConflictError
 from star_protocol.models.payloads import (
     SystemPayload,
     MessagePayload,
@@ -47,6 +49,11 @@ from star_protocol.exceptions import (
 __all__ = [
     # Version
     "__version__",
+    "COMPACT_PROTOCOL",
+    "TERMINAL_STATUSES",
+    "validate_compact_content",
+    "ActionTimeoutError",
+    "ProtocolConflictError",
     # Models
     "Envelope",
     "SystemPayload",

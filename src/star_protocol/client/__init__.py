@@ -1,5 +1,6 @@
 """Client 客户端模块"""
 
+from star_protocol.client.compact import ActionTimeoutError, ProtocolConflictError
 from star_protocol.client.base import BaseClient
 from star_protocol.client.agent import AgentClient
 from star_protocol.client.environment import EnvironmentClient
@@ -9,6 +10,8 @@ from star_protocol.client.mixins import MonitorLevel
 
 __all__ = [
     "BaseClient",
+    "ActionTimeoutError",
+    "ProtocolConflictError",
     "AgentClient",
     "EnvironmentClient",
     "HumanClient",

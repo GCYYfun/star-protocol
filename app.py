@@ -32,7 +32,7 @@ def create_hub_app(
     app = FastAPI(
         title=title,
         description="Multi-Agent Communication Hub based on Star Protocol",
-        version="0.2.0",
+        version="0.3.0",
     )
 
     # CORS 中间件
@@ -77,7 +77,7 @@ def create_hub_app(
     @app.get("/health")
     async def health_check():
         """健康检查"""
-        return {"status": "ok", "version": "0.2.0"}
+        return {"status": "ok", "version": "0.3.0"}
 
     @app.get("/stats")
     async def get_stats():
