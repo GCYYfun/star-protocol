@@ -372,14 +372,14 @@ ACK 确认物理投递已持久接收，不确认 Action 成功执行；执行�
   "payload": {
     "type": "notify",
     "content": {
-      "event": "VILLAGE_DELIVERY_ACK",
+      "event": "ACK",
       "msg": {"envelope_id": "550e8400-e29b-41d4-a716-446655440008"}
     }
   }
 }
 ```
 
-当前原生名字保留为 `VILLAGE_DELIVERY_ACK`，属于 system 控制通道，不是 compact Event。`msg` 恰好包含 UUID 字段 `envelope_id`，指向被确认的原 Envelope.id。Hub 只允许当前成员向所属活动 Environment 发出该 ACK，尚不提供对称的 Env→成员 ACK 路径。
+当前原生名字保留为 `ACK`，属于 system 控制通道，不是 compact Event。`msg` 恰好包含 UUID 字段 `envelope_id`，指向被确认的原 Envelope.id。Hub 只允许当前成员向所属活动 Environment 发出该 ACK，尚不提供对称的 Env→成员 ACK 路径。
 
 接收方先校验并持久保存完整 Envelope，再显式调用 `send_delivery_ack(original_sender, envelope.id)`；SDK 不自动保存日志或发送持久 ACK。Env 的 `on_delivery_ack(sender, envelope_id)` 应核对 outbox 的预期接收者，并幂等删除该物理投递。单纯 WebSocket 发送完成不证明已持久接收。
 
