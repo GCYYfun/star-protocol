@@ -1,869 +1,451 @@
-# Star Protocol 规范文档
+# Star Protocol 规范
 
-## 属性概览
+| 项目 | 当前约定 |
+|---|---|
+| 应用协议 | `agent-env-compact/2` |
+| 对应实现 | Python SDK `0.3.0`，基准提交 `e29e2ee` |
+| 传输 | WebSocket，JSON |
+| 消息结构 | Envelope → Payload → Content |
+| 更新日期 | 2026-10-10 |
 
-| 属性         | 描述                               |
-| ------------ | ---------------------------------- |
-| **版本**     | v1.0                               |
-| **状态**     | Draft                              |
-| **协议层级** | Application Layer (Over WebSocket) |
-| **传输格式** | JSON                               |
-| **最后更新** | 2026-02-11                         |
+本文描述当前 SDK 与 Hub 实现使用的协议。应用协议版本、SDK 包版本和业务 Schema 的版本分别管理。本文替代旧版 `success/ref_id`、任意业务 `data` 及单向工具发现规则。
 
----
+- [1. 主体与连接](#1-主体与连接)
+- [2. 三层消息结构](#2-三层消息结构)
+- [3. 本地注册与双向协商](#3-本地注册与双向协商)
+- [4. Action 与 Outcome](#4-action-与-outcome)
+- [5. Event 与解析方式](#5-event-与解析方式)
+- [6. 路由与广播](#6-路由与广播)
+- [7. 投递确认与恢复](#7-投递确认与恢复)
+- [8. System、Stream 与 Monitor](#8-systemstream-与-monitor)
+- [9. 实现职责与验证入口](#9-实现职责与验证入口)
 
-## 目录
+## 1. 主体与连接
 
-- [属性概览](#属性概览)
-- [1. 概述 (Overview)](#1-概述-overview)
-  - [1.1 核心设计原则](#11-核心设计原则)
-- [2. 架构定义 (Architecture)](#2-架构定义-architecture)
-  - [2.1 整体拓扑](#21-整体拓扑)
-- [3. 连接与生命周期](#3-连接与生命周期)
-  - [3.1 WebSocket 端点](#31-websocket-端点)
-  - [3.2 状态流转](#32-状态流转)
-- [4. 协议类型定义 (Type Definitions)](#4-协议类型定义-type-definitions)
-  - [4.1 Layer 1: Envelope (路由层)](#41-layer-1-envelope-路由层)
-    - [4.1.1 EnvelopeType 枚举](#411-envelopetype-枚举)
-  - [4.2 Layer 2: Payload (业务层)](#42-layer-2-payload-业务层)
-    - [A. System Payload](#a-system-payload)
-    - [B. Message Payload](#b-message-payload)
-    - [C. Broadcast Payload](#c-broadcast-payload)
-    - [D. Monitor Payload](#d-monitor-payload)
-- [5. System Envelope (系统信件)](#5-system-envelope-系统信件)
-  - [5.1 概述](#51-概述)
-  - [5.2 交互类型与数据结构 (SystemType)](#52-交互类型与数据结构-systemtype)
-    - [5.2.1 `ctrl` (控制指令)](#521-ctrl-控制指令)
-    - [5.2.2 `notify` (通知)](#522-notify-通知)
-    - [5.2.3 `error` (错误回调)](#523-error-错误回调)
-  - [5.3 完整交互示例：加入环境](#53-完整交互示例加入环境)
-- [6. Message Envelope (消息信件)](#6-message-envelope-消息信件)
-  - [6.1 概述](#61-概述)
-  - [6.2 交互类型与数据结构 (MessageType)](#62-交互类型与数据结构-messagetype)
-    - [6.2.1 `action` (动作请求)](#621-action-动作请求)
-    - [6.2.2 `outcome` (操作结果反馈)](#622-outcome-操作结果反馈)
-    - [6.2.3 `event` (私有/特定事件通知)](#623-event-私有特定事件通知)
-    - [6.2.4 `stream` (单播流式数据)](#624-stream-单播流式数据)
-  - [6.3 完整交互示例：执行动作与结果反馈](#63-完整交互示例执行动作与结果反馈)
-- [7. Broadcast Envelope (广播信件)](#7-broadcast-envelope-广播信件)
-  - [7.1 概述](#71-概述)
-  - [7.2 交互类型与数据结构 (BroadcastType)](#72-交互类型与数据结构-broadcasttype)
-    - [7.2.1 `event` (全局环境事件)](#721-event-全局环境事件)
-    - [7.2.2 `stream` (数据公共流)](#722-stream-数据公共流)
-  - [7.3 完整交互示例：全局环境变更](#73-完整交互示例全局环境变更)
-- [8. Monitor Envelope (监控信件)](#8-monitor-envelope-监控信件)
-  - [8.1 概述](#81-概述)
-  - [8.2 架构](#82-架构)
-  - [8.3 交互类型与数据结构 (MonitorType)](#83-交互类型与数据结构-monitortype)
-    - [8.3.1 `ctrl` (控制指令)](#831-ctrl-控制指令)
-    - [8.3.2 `data` (透传监控数据)](#832-data-透传监控数据)
-    - [8.3.3 `notify` (监控通知)](#833-notify-监控通知)
-  - [8.4 完整交互示例](#84-完整交互示例)
-- [Changelog](#changelog)
+Hub 负责会话、环境成员关系和路由。业务通过独立的客户端接收契约表达。
 
----
+| 主体 | 功能 |
+|---|---|
+| Agent | 观测、调用工具、接收结果、发送自身行为与发言；应用决定如何使用模型 |
+| Environment（Env） | 提供环境能力与接收契约，执行业务、发布事实及反馈 |
+| Human | 通过应用界面交互；是否允许调用某个工具由业务授权决定 |
+| Monitor | 订阅客户端遥测，接收 `monitor` 消息 |
+| Hub Monitor | 通过独立监控连接观察通过入口校验的非 `monitor` 报文 |
 
-## 1. 概述 (Overview)
-
-**Star Protocol** 是一个专为 **多智能体系统 (Multi-Agent Systems, MAS)** 设计的轻量级、强类型协作通信协议。它采用 **Hub-Spoke** 拓扑结构，支持 Agent（智能体）、Environment（环境）与 Human（人类）之间的实时异构协作。
-
-### 1.1 核心设计原则
-
-- **严格多态 (Strict Polymorphism)**：内层载荷 (Payload) 的结构和类型定义完全取决于外层信封 (Envelope) 的 `type` 字段。这种设计确保了路由层与业务层的解耦。
-- **环境即容器 (Environment as Room)**：Client 连接后默认处于私有状态 (Home)。必须显式加入特定的 Environment（类似于聊天室或游戏房间）才能与其他 Client 进行广播或交互。
-
----
-
-## 2. 架构定义 (Architecture)
-
-### 2.1 整体拓扑
-
-系统采用星型（Hub-Spoke）架构，Hub Server 作为中央路由器，负责转发各端消息。
-
-```
-graph TD
-    subgraph Clients
-        Agent[Agent Client - Intelligent]
-        Env[Environment Client - World Logic]
-        Human[Human Client - Observer & Player]
-    end
-
-    Hub((Hub Server - Router))
-
-    Agent <==>|WebSocket| Hub
-    Env <==>|WebSocket| Hub
-    Human <==>|WebSocket| Hub
-
-    style Hub fill:#f9f,stroke:#333,stroke-width:2px
+```mermaid
+flowchart LR
+    Agent[Agent] <-->|WebSocket| Hub[Hub 路由]
+    Env[Environment] <-->|WebSocket| Hub
+    Human[Human] <-->|WebSocket| Hub
+    Monitor[Monitor / Hub Monitor] <-->|监控通道| Hub
 ```
 
-or
+连接端点为 `ws://<host>:<port>/ws/<role>/<client_id>`；部署 TLS 时使用 `wss://`。`role` 为 `agent / environment / human / monitor / hub_monitor`。SDK 的 `connect()` 接收基础 URL，例如 `ws://127.0.0.1:8765`，自动拼接端点。
 
-```
-┌─────────────────┐          ┌─────────────────┐          ┌──────────────────┐
-│   Agent Client  │          │    Hub Server   │          │Environment Client│
-│ (Intelligent)   │  ◄────►  │   (Router)      │  ◄────►  │ (World Logic)    │
-└─────────────────┘          └─────────────────┘          └──────────────────┘
-                                      ▲
-                                      │ WebSocket
-                                      │
-                                      │
-                                      │
-                                      ▼
-                            ┌───────────────────┐
-                            │    Human Client   │
-                            │(Observer & Player)│
-                            └───────────────────┘
+Environment 连接时建立以自身 `client_id` 命名的环境，不需要再次 `join`。Agent/Human 的业务成员状态通常为 `disconnected → home → in_env`。Monitor 在未加入环境时也能使用监控通道。
 
-```
+成员用 `system.ctrl` 加入或离开环境；业务调用还需完成第 3 节的能力协商。本地 `join_environment()` 发送后会乐观更新状态，不能替代 Hub 的 `joined` 确认。Agent 可用 `join_with_retry()` 等待确认；应用也可显式等待通知。
 
-## 3. 连接与生命周期
+Hub 将 `Envelope.sender` 与连接路径中的 `client_id` 绑定，拒绝不一致的发送者。当前示例 Hub 没有账号或 Token 鉴权；部署时的身份认证由应用提供。
 
-### 3.1 WebSocket 端点
+## 2. 三层消息结构
 
-连接 URL 格式如下：
-`ws://<host>:<port>/<role>/<client_id>`
+- **Envelope**：谁发送、发给谁、采用哪一类 Payload，以及物理投递的 ID 和时间。
+- **Payload**：用 `type` 选择 Content 的解析规则。
+- **Content**：消息语义、逻辑身份、因果关联和正文或调用参数。
 
-- **role**: 客户端角色 (e.g., `agent`, `environment`, `human`)
-- **client_id**: 客户端唯一标识
+### 2.1 Envelope
 
-### 3.2 状态流转
+Wire 中以下六个字段全部必填，不允许额外字段。
 
-客户端连接后存在两种主要状态：
+| 字段 | 类型与约束 | 含义 |
+|---|---|---|
+| `id` | UUID 字符串 | 物理投递身份；SDK 默认生成 UUIDv4，解析器接受合法 UUID，不限定 v4 |
+| `timestamp` | 非负整数 | 发送时间，Unix 毫秒；不是可靠排序或重放游标 |
+| `type` | `system / message / broadcast / monitor` | 决定 Payload 类型 |
+| `sender` | 字符串，1..256 字符 | 连接主体的 ID |
+| `recipient` | 字符串，1..256 字符 | 客户端 ID、控制目标 `hub` 或当前环境广播目标 `@env` |
+| `payload` | 对象 | 必须与 Envelope.type 匹配 |
 
-1. **Home (初始状态)**
-
-- **权限**: 只能收发 `system` 类型消息。
-- **行为**: 进行身份验证、列出房间、申请加入环境。
-
-2. **In-Env (环境内状态)**
-
-- **权限**: 可收发 `message`, `broadcast` 类型消息。
-- **行为**: 业务交互、感知环境。
-
----
-
-## 4. 协议类型定义 (Type Definitions)
-
-Star Protocol 采用双层结构：**Envelope (路由层)** + **Payload (业务层)**。
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         Envelope                            │
-│  负责消息路由、寻址、验证                                       │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                      Payload                        │    │
-│  │  负责具体业务逻辑、动作处理、状态同步                     │    │
-│  │                                                     │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4.1 Layer 1: Envelope (路由层)
-
-Envelope 是所有数据包的通用外壳，其 `type` 字段充当鉴别器 (Discriminator)，决定 `payload` 的结构。
-
-```typescript
-interface Envelope {
-  /** 消息唯一标识 (UUID v4) */
-  id: string;
-
-  /** 发送时间戳 (Unix ms) */
-  timestamp: number;
-
-  /** 决定 Payload 类型的关键字段 */
-  type: EnvelopeType;
-
-  /** 发送者 ID */
-  sender: string;
-
-  /** 接收者 ID 或 特殊目标 ("hub", "@all", "@env") */
-  recipient: string;
-
-  /** 业务载荷，类型取决于 Envelope.type */
-  payload: SystemPayload | MessagePayload | BroadcastPayload | MonitorPayload;
-}
-```
-
-#### 4.1.1 EnvelopeType 枚举
-
-| 类型值      | 含义     | 通信模式         | 对应 Payload 类型  |
-| ----------- | -------- | ---------------- | ------------------ |
-| `system`    | 系统控制 | Hub 处理或发出   | `SystemPayload`    |
-| `message`   | 业务消息 | 点对点 (Unicast) | `MessagePayload`   |
-| `broadcast` | 环境广播 | 组播 (Multicast) | `BroadcastPayload` |
-| `monitor`   | 监控数据 | Hub 转发         | `MonitorPayload`   |
-
----
-
-### 4.2 Layer 2: Payload (业务层)
-
-#### A. System Payload
-
-- **条件**: `Envelope.type == "system"`
-- **用途**: 连接管理、房间控制、错误报告。
-
-```typescript
-interface SystemPayload {
-  type: SystemType;
-  content: any;
-}
-
-enum SystemType {
-  ERROR = "error", // 错误信息
-  CTRL = "ctrl", // 房间控制 (join, leave)
-  NOTIFY = "notify", // 系统通知 (joined, left)
-}
-```
-
-#### B. Message Payload
-
-- **条件**: `Envelope.type == "message"`
-- **用途**: Agent 与 Environment 之间的核心业务交互。
-
-```typescript
-interface MessagePayload {
-  type: MessageType;
-  content: any;
-}
-
-enum MessageType {
-  ACTION = "action", // Agent 发出的动作
-  OUTCOME = "outcome", // Environment 返回的结果
-  STREAM = "stream", // 点对点数据流 (如 Token 流)
-  EVENT = "event", // 定向事件通知
-}
-```
-
-#### C. Broadcast Payload
-
-- **条件**: `Envelope.type == "broadcast"`
-- **用途**: 环境向多个 Agent 广播状态。
-
-```typescript
-interface BroadcastPayload {
-  type: BroadcastType;
-  content: any;
-}
-
-enum BroadcastType {
-  EVENT = "event", // 环境事件 (天气变化, 时间流逝)
-  STREAM = "stream", // 广播数据流 (如解说语音)
-}
-```
-
-#### D. Monitor Payload
-
-- **条件**: `Envelope.type == "monitor"`
-- **用途**: 监控数据的传输和控制。
-
-```typescript
-interface MonitorPayload {
-  type: MonitorType;
-  content: any;
-}
-
-enum MonitorType {
-  CTRL = "ctrl", // 控制命令 (enable, disable, subscribe, unsubscribe)
-  DATA = "data", // 监控数据 (state_change, message_sent, etc.)
-  NOTIFY = "notify", // 通知 (monitoring_enabled, subscribed, etc.)
-}
-```
-
----
-
-## 5. System Envelope (系统信件)
-
-### 5.1 概述
-
-System Envelope（系统控制信件）是不涉及特定业务逻辑的底层控制协议层。它的主要目标是管理客户端的连接状态、分配和进入房间（Environment）、进行错误报告以及系统级的通知。
-所有与 **Hub Server** 直接交互的控制指令必须通过此通道发送。
-
-### 5.2 交互类型与数据结构 (SystemType)
-
-**本节概览 (Mini-TOC)**
-
-- [5.2.1 `ctrl`：控制指令](#521-ctrl-控制指令)
-- [5.2.2 `notify`：系统通知](#522-notify-系统通知)
-- [5.2.3 `error`：错误回调](#523-error-错误回调)
-
-为了保证底层协议解析的稳定性，System Envelope 下辖的 3 种子类型拥有固定的字段结构约定。
-
-#### 5.2.1 `ctrl` (控制指令)
-
-- **发送方**：任意 Client
-- **接收方**：Hub Server (`recipient: "hub"`)
-- **说明**：向 Hub Server 申请执行的操作控制指令。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface SystemCtrlContent {
-  op: "join" | "leave" | string; // 具体操作命令，如加入房间等
-  [key: string]: any; // 可基于具体的命令补充附加可选参数，例如 env_id
-}
-```
-
-**`SystemCtrlContent` 负载详情举例**：
-| `op` | 说明 | 附加参数示例数据 |
-|---------|------|---------|
-| `join` | 加入指定环境 | `{env_id:string}` |
-| `leave` | 离开当前环境 | `{env_id:string}` |
-
-#### 5.2.2 `notify` (通知)
-
-- **发送方**：Hub Server
-- **接收方**：特定 Client
-- **说明**：Hub 服务器对 Client 指令的确认回执或主动推送的状态广播（例如：`status: "joined"`）。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface SystemNotifyContent {
-  event: string; // 通知事件类型
-  msg: string; // 通知的消息
-  [key: string]: any; // 可选的附带参数集合，由业务所需自行派生
-}
-```
-
-**`SystemNotifyContent` 负载详情举例**：
-| `event` | 说明 | `msg` 示例数据 | 附加参数示例数据 (`[key:string]`) |
-|---------|------|---------|---------|
-| `joined` | 成功加入环境的广播 | `"agent_01 joined room_1"` | `{env_id:string, roles:string[]}` |
-| `left` | 离开环境的广播 | `"agent_01 left room_1"` | `{env_id:string}` |
-
-#### 5.2.3 `error` (错误回调)
-
-- **发送方**：Hub Server / Environment
-- **接收方**：特定 Client
-- **说明**：执行任何动作失败（如寻址失败，权限不足）时返回包含错误码的硬性说明。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface SystemErrorContent {
-  code: number; // 标准错误码 (类 HTTP 状态码或自定义码)
-  msg: string; // 人类可读的错误明文描述
-  original_msg_id?: string; // 选填：造成该错误的原始信封 ID，便于溯源
-  details?: any; // 选填：更详细的错误原因、堆栈信息等扩展排查参数
-}
-```
-
-### 5.3 完整交互示例：加入环境
-
-以下是一个典型的“Agent 申请加入 Environment”的过程：
-
-**步骤 1：Agent 发起 Join 控制指令（Client -> Hub）**
+本地构造 `Envelope` 可自动生成 `id/timestamp` 并默认 `type="message"`；接收 wire 不补齐缺失字段。
 
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "timestamp": 1620000000000,
-  "type": "system",
-  "sender": "agent_01",
-  "recipient": "hub",
-  "payload": {
-    "type": "ctrl",
-    "content": {
-      "op": "join",
-      "env_id": "room_1"
-    }
-  }
-}
-```
-
-**步骤 2：Hub 返回审批结果/通知（Hub -> Client）**
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440005",
-  "timestamp": 1620000000100,
-  "type": "system",
-  "sender": "hub",
-  "recipient": "agent_01",
-  "payload": {
-    "type": "notify",
-    "content": {
-      "event": "joined",
-      "msg": "agent_01 joined room_1"
-    }
-  }
-}
-```
-
----
-
-## 6. Message Envelope (消息信件)
-
-### 6.1 概述
-
-Message Envelope 是 Star Protocol 的**核心业务信件**，主要处理基于单播（Unicast，点对点）形式的领域逻辑交互。在多智能体场景中，它代表着 Agent 执行特定的决策，或者是 Environment 返还具体的动作结果。
-使用此通道的客户端**必须处于同一个 Environment 之中**（In-Env 状态）。
-
-### 6.2 交互类型与数据结构 (MessageType)
-
-**本节概览 (Mini-TOC)**
-
-- [6.2.1 `action`：动作请求](#621-action-动作请求)
-- [6.2.2 `outcome`：操作结果反馈](#622-outcome-操作结果反馈)
-- [6.2.3 `event`：私有/特定事件通知](#623-event-私有特定事件通知)
-- [6.2.4 `stream`：单播流式数据](#624-stream-单播流式数据)
-
-这是开发者**大量派生自身业务逻辑**的主要阵地。尽管业务千变万化，为了维持统一的分发和解析接口，这里约束了 4 种子类型的根节点数据结构，允许你在 params 和 data 等字典字段内任意扩充逻辑。
-
-#### 6.2.1 `action` (动作请求)
-
-- **发送方**：Agent / Human
-- **接收方**：Environment (`recipient: "env_main"`)
-- **说明**：智能体在世界上试图主动执行的一系列能力与动作触发（如：移动、攻击、合成物品）。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface MessageActionContent {
-  id: string; // Action 的 ID，必须带上以保证回调对照(如有需要)
-  name: string; // 动作的唯一标识符 (例如: "move_to", "use_item")
-  params?: {
-    // 可选的动作所需参数对象，业务全权自定义
-    [key: string]: any;
-  };
-}
-```
-
-#### 6.2.2 `outcome` (操作结果反馈)
-
-- **发送方**：Environment
-- **接收方**：特定 Agent / Human
-- **说明**：环境在结算完毕上述 Action 后返回的单一执行确认单据。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface MessageOutcomeContent {
-  ref_id: string; // 原始 Action Envelope 的 ID，必须带上以保证回调对照
-  success: boolean; // 此动作是否成功结算或生效
-  data?: {
-    // 选填：若是成功，里面包含了更新后的自身状态、获取资源的详细字典，全权自定义
-    [key: string]: any;
-  };
-  error?: string; // 选填：若是失败(success=false)，可直接给出理由说明
-}
-```
-
-#### 6.2.3 `event` (私有/特定事件通知)
-
-- **发送方**：Environment
-- **接收方**：特定 Agent
-- **说明**：环境通过单播方式专门派发给单一角色的动态推送（例如当前角色被某个盗贼偷了钱，这不应该被全局知道）。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface MessageEventContent {
-  id: string; // Event 的 ID，必须带上以保证回调对照(如有需要)
-  name: string; // 识别的具体业务事件名称 (如: "conversation")
-  data: {
-    // 推发的数据载荷，全权自定义扩展
-    [key: string]: any;
-  };
-}
-```
-
-**`MessageEventContent` 负载详情举例**：
-| `name` | 说明 | `data` 示例数据 |
-|---------|------|---------|
-| `conversation` | 被特定角色或系统搭话/系统私聊 | `{input:string, speaker_id:string}` |
-
-#### 6.2.4 `stream` (单播流式数据)
-
-- **发送方/接收方**：任意 Client
-- **说明**：处理类似对话系统的 LLM Token 流的碎片化推送。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface MessageStreamContent {
-  id: string; // Stream 的 ID，确保唯一性
-  sequence: number; // 序号，保证流片段是有序到达的 (比如 0、1、2 递增)
-  chunk: any; // 本次碎片的实际内容 (例如单个字串 token，也可以是对象)
-  is_end: boolean; // 标记本段流式传输是否到此结束
-}
-```
-
-### 6.3 完整交互示例：执行动作与结果反馈
-
-以下模拟一个 Agent 在环境中执行“移动 (move)”动作，并收到环境确定的交互过程。
-
-**步骤 1：Agent 发起动作（Agent -> Env）**
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440100",
-  "timestamp": 1620000000100,
+  "id": "550e8400-e29b-41d4-a716-446655440001",
+  "timestamp": 1791590400000,
   "type": "message",
   "sender": "agent_01",
   "recipient": "env_main",
   "payload": {
-    "type": "action",
-    "content": {
-      "id": "action-move-0403085830-001",
-      "name": "move",
-      "params": {
-        "x": 10,
-        "y": 5
-      }
-    }
+    "type": "discover",
+    "content": {"protocols": ["agent-env-compact/2"]}
   }
 }
 ```
 
-**步骤 2：Environment 返回结算结果（Env -> Agent）**
+### 2.2 Payload
+
+Payload 只允许 `type` 和 `content`；`content` 必须是 JSON 对象。
+
+| Envelope.type | 允许的 Payload.type | 用途 |
+|---|---|---|
+| `system` | `ctrl / notify / error` | 加入、离开、成员通知、投递确认、协议错误 |
+| `message` | `discover / specification / action / outcome / event / stream` | 定向协商与业务交互 |
+| `broadcast` | `event / stream` | 当前环境成员广播 |
+| `monitor` | `ctrl / data / notify` | 监控控制、遥测与确认 |
+
+`action/outcome/event/discover/specification` 使用精确的 Content 字段规则。`system/monitor/stream` 保留原生 Star 可扩展 JSON 对象；第 8 节列的是当前实现约定，不能等同于已安装完整的 compact Schema。
+
+### 2.3 JSON 与身份约束
+
+接收 JSON 拒绝重复键和 `NaN/Infinity`；Content 必须是有限 JSON 值，不接收 tuple 等 Python 专有值。Envelope 经模型规范化、以紧凑 JSON 重新编码后的 UTF-8 大小不得超过 **512 KiB**；此检查不等同于原始 WebSocket 字节大小限制。
+
+Action、Outcome、Event 的 `content.id` 为 1..256 字符的逻辑 ID，不要求 UUID 格式。发送方应在首次发送前生成并保存；`gen_id("action" / "outcome" / "event")` 提供默认生成方式。逻辑 ID 在同一记录空间内不可跨类型复用，也不可改变原 Content。
+
+`Envelope.id` 与 `Content.id` 用途不同：重发同一逻辑 Action/Outcome 可以使用新的 Envelope；重放同一待确认物理投递，必须保留原 Envelope 的 ID、时间和完整内容。Hub 不替缺失的逻辑 ID 生成新 ID。
+
+## 3. 本地注册与双向协商
+
+### 3.1 接收方声明
+
+每个主体先注册自己能接收的能力，再向对方公布完整快照。`specification` 的 Content 必须且只包含：
+
+| 字段 | 约束 |
+|---|---|
+| `protocol` | 本实现选择 `agent-env-compact/2` |
+| `tools` | 0..256 个工具定义；同目录的名称唯一 |
+| `events` | 0..256 个 Event 定义；同目录的名称唯一 |
+
+| 定义 | 必填字段 | 可选字段 |
+|---|---|---|
+| Tool | `name`、`description`、`parameters`（参数 Schema 对象） | `tags`（字符串数组） |
+| Event | `name`、`description`、`handler`（`model / runtime`） | `data_schema`（data Schema 对象） |
+
+`name` 为 1..128 字符，`description` 为 1..32000 字符；每个 `tags` 项为 1..128 字符。不增加 `output_schema/params_schema` 等平行字段。无参工具仍提供 Schema，并使用 `params: {}`。
+
+Schema 使用 JSON Schema Draft 2020-12，实例校验启用 `FormatChecker`。支持本地 `$defs`、`$ref` 和 `$dynamicRef`；引用必须以 `#` 开头，不隐式读取外部 Schema。需要禁止额外业务字段时，在 Schema 中明确设置 `additionalProperties: false`；SDK 不自动给任意 Schema 添加此约束。省略 Event 的 `data_schema` 表示只接收 `{text}`，而不是允许任意对象。
+
+下面是一个 Environment 的完整接收快照（此处展示 Content）：
 
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440150",
-  "timestamp": 1620000000250,
-  "type": "message",
-  "sender": "env_main",
-  "recipient": "agent_01",
-  "payload": {
-    "type": "outcome",
-    "content": {
-      "ref_id": "550e8400-e29b-41d4-a716-446655440100",
-      "success": true,
-      "data": {
-        "current_pos": { "x": 10, "y": 5 },
-        "stamina_cost": 2.5
+  "protocol": "agent-env-compact/2",
+  "tools": [
+    {
+      "name": "set_light",
+      "description": "设置灯光开关。",
+      "parameters": {
+        "type": "object",
+        "properties": {"on": {"type": "boolean"}},
+        "required": ["on"],
+        "additionalProperties": false
       }
     }
-  }
-}
-```
-
-**事件消息**
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440100",
-  "timestamp": 1620000000100,
-  "type": "message",
-  "sender": "env_main",
-  "recipient": "agent_01",
-  "payload": {
-    "type": "event",
-    "content": {
-      "id": "event-conversation-0403085830-001",
-      "name": "conversation",
-      "data": {
-        "input": "今天天气如何？",
-        "speaker_id": "system_npc"
+  ],
+  "events": [
+    {"name": "speech", "description": "接收自然语言发言。", "handler": "model"},
+    {
+      "name": "activity.state",
+      "description": "接收主体自身活动状态。",
+      "handler": "runtime",
+      "data_schema": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string", "minLength": 1, "maxLength": 32000},
+          "state": {"enum": ["idle", "working", "listening"]}
+        },
+        "required": ["text", "state"],
+        "additionalProperties": false
       }
     }
-  }
+  ]
 }
 ```
 
----
+`configure_capabilities(tools=..., events=..., runtime_handlers=...)` 安装本地接收契约。runtime Event 必须已有异步处理器，签名为 `(sender, full_content)`；仅写 `"handler": "runtime"` 不会安装行为。单播 model Event 进入 `on_event()`，具备广播分派的客户端使用 `on_broadcast_event()`；runtime Event 由统一接收校验入口分派。Tool Schema 约束参数，实际执行由接收客户端的 `on_action()` 分派；工具声明不会自动生成函数。
 
-## 7. Broadcast Envelope (广播信件)
+Agent/Human 通常不提供工具，可用 `tools: []` 声明模型输入及 runtime 反馈。具备 Outcome 分派的调用方使用框架 `on_outcome()` 接收结果，不属于 Event 或 Tool 注册。接收远端快照只建立调用/发送契约，不安装远端函数。
 
-### 7.1 概述
+### 3.2 协商顺序
 
-Broadcast 通道是用于向一个群体分发状态变化的**公共通道**。当环境（或具备高权限的观察端）发生涉及全体或某个组落盘的数据变量更新时，它不再需要逐个给系统内的 Agent 循环发送信息，而是利用特别的标识 (`@all` 或 `@env`) 将信封发出。Hub Server 接到它后会自动进行展开分发。
+`discover` Content 只包含 `protocols`：1..8 个不重复的非空版本字符串，每项最多 64 字符。本 SDK 发出 `["agent-env-compact/2"]`；不兼容的协议不能启用业务交互。
 
-### 7.2 交互类型与数据结构 (BroadcastType)
-
-**本节概览 (Mini-TOC)**
-
-- [7.2.1 `event`：全局环境事件](#721-event-全局环境事件)
-- [7.2.2 `stream`：数据公共流](#722-stream-数据公共流)
-
-Broadcast 是公共集会场所，主要包含以下 2 种子协议类型，它们的大框架也是定型锁死的：
-
-#### 7.2.1 `event` (全局环境事件)
-
-- **发送方**：Environment
-- **接收方**：`@all` 或 `@env`
-- **说明**：比如时间流逝、全屏天气巨变或系统级的规则公告。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface BroadcastEventContent {
-  id: string; // Event 的 ID，必须带上以保证回调对照(如有需要)
-  name: string; // 识别的具体广播事件名称 (如: "time_passed", "weather_update")
-  data: {
-    // 推发的全局数据载荷，全权自定义扩展
-    [key: string]: any;
-  };
-}
+```mermaid
+sequenceDiagram
+    participant A as Agent / Human
+    participant H as Hub
+    participant E as Environment
+    Note over A,E: 先配置各自的接收 Schema 与真实处理器
+    A->>H: system.ctrl join(env_id)
+    H-->>A: system.notify joined
+    H-->>E: system.notify client_joined(client_id, role)
+    A->>H: message.discover(protocols)
+    H->>E: 路由 discover
+    E->>H: specification：Env 接收的 tools/events
+    H->>A: 路由 Env 声明
+    Note over A: 校验并保存 Env 快照
+    A->>H: 自动回送 specification：自身接收能力
+    Note over A: on_specification(Env 快照)
+    H->>E: 路由成员声明
+    Note over E: 校验保存成员快照，on_specification()
+    Note over A,E: 应用等待双方就绪后再调用工具或发送业务 Event
 ```
 
-**`BroadcastEventContent` 负载详情举例**：
-| `name` | 说明 | `data` 示例数据 |
-|---------|------|---------|
-| `time_passed` | 时间推进/温度等周期变化 | `{time_of_day:string, temperature:number}` |
-| `weather_update` | 天气突变 | `{condition:string, severity:number}` |
+同环境内 Agent↔Agent、Agent↔Human 私聊也各自交换声明；不能用 Agent↔Env 的协商替代另一对主体的契约。
 
-#### 7.2.2 `stream` (数据公共流)
+SDK 先保存收到的快照，再按需自动发送反向声明，最后调用 `on_specification()`。因此回调可能晚于反向声明发送，不能把回调时间当作网络到达时间。
 
-- **发送方**：主要为 Environment 等
-- **接收方**：`@all` 或 `@env`
-- **说明**：供所有观察者接受的公共直播解说信道，或大屏幕实时渲染画面流。
-- **固定数据结构**：
+`protocol_for(peer)` 表示本端已发送自身声明并收到对端声明；它不证明对端处理器已经完成安装回调。Hub 收到两个方向的声明后才放行 Action/Outcome/Event；应用就绪流程仍应确认双方已接收并准备好处理。多对端场景用 `specification_for(peer)` 读取对应快照。
 
-```typescript
-// Envelope.payload.content 的实际内容
-interface BroadcastStreamContent {
-  id: string; // 本次广播流的唯一会话标识
-  sequence: number; // 序号，保证流片段是有序解析的
-  chunk: any; // 本次广播帧的实际内容
-  is_end: boolean; // 标记本段公共广播流是否到此结束
-}
+声明是完整快照，不是增量补丁。新增 `discover` 会使该对主体的旧契约失效；重连清除本地协商缓存，必须重新交换。普通 `leave` 不等同于清空全部本地历史，重新加入时仍应显式重新协商。能力变更先更新真实本地行为，再向每个相关对端重新发布接收快照。
+
+## 4. Action 与 Outcome
+
+### 4.1 Action：请求执行已声明工具
+
+Content 只能包含以下三个必填字段：
+
+| 字段 | 约束 |
+|---|---|
+| `id` | 本次动作的不可变逻辑 ID |
+| `name` | 接收方已声明的工具名，1..128 字符 |
+| `params` | JSON 对象，按该接收工具的 `parameters` 校验；无参也必须为 `{}` |
+
+```json
+{"id": "action-light-001", "name": "set_light", "params": {"on": true}}
 ```
 
-### 7.3 完整交互示例：全局环境变更
+典型方向为 Agent/Human→Env。Hub 不通过角色统一禁止 Human 调用工具，业务权限由接收方处理。其他方向需要接收方声明工具并实现真实 Action 处理；路由可达不代表默认客户端已实现该业务。
 
-以下展示 Environment 触发了“时间推进”全局事件，向所有处于环境内的角色告知：
+同一 Action 重试保留原 `id/name/params` 和目标；SDK 校验原调用者、目标及内容不变。重复 Action 仍进入 `on_action()`，环境应先查持久账本、重放原 Outcome，避免重复执行。SDK 的内存去重不提供执行幂等或外部事务保证。
 
-**步骤 1：Environment 广播事件（Env -> @all）**
+交易 `exchange_id`、取消或查询的 `action_id` 等可以是工具 Schema 约束的业务参数，它们不替代本次 `content.id`。
+
+### 4.2 Outcome：同一 Action 的结果流
+
+Content 必须且只包含 `id/refs/status/data`。
+
+| 字段 | 约束 |
+|---|---|
+| `id` | 本条 Outcome 的不可变逻辑 ID；每条中间回执和最终回执分别生成 |
+| `refs` | 恰好一个逻辑 Action ID；不是原 Action 的 Envelope UUID |
+| `status` | 下表六种状态之一 |
+| `data` | 只允许 `{"text": "自然语言结果或原因"}`；text 为 1..32000 字符 |
+
+| status | 含义 | 是否终态 |
+|---|---|---|
+| `accepted` | 已接受，尚未确认完成 | 否 |
+| `running` | 正在持续执行 | 否 |
+| `completed` | 执行完成 | 是 |
+| `rejected` | 请求被拒绝，例如权限或业务前提不满足 | 是 |
+| `failed` | 执行失败，原因写入 text | 是 |
+| `cancelled` | 已确认取消或终止 | 是 |
 
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440200",
-  "timestamp": 1620000000200,
-  "type": "broadcast",
-  "sender": "env_main",
-  "recipient": "@all",
-  "payload": {
-    "type": "event",
-    "content": {
-      "id": "event-time_passed-0403085830-001",
-      "name": "time_passed",
-      "data": {
-        "time_of_day": "night",
-        "temperature": 15,
-        "message": "The sun has set, it's getting colder."
-      }
-    }
-  }
+  "id": "outcome-light-001",
+  "refs": ["action-light-001"],
+  "status": "completed",
+  "data": {"text": "灯光已打开。"}
 }
 ```
 
-_注：此消息发出后，Hub 将解析 `@all`，并根据当前的拓扑图，将其拷贝至所有连接且在线状态的目标 Agent/Human 所对应的独立 WebSocket 链路中。_
+Outcome 不使用 `success/ref_id/error/epoch/code/effect/retry`；结果及失败原因用 text 表达，后续决策由调用方完成。
 
----
+Action 可以直接获得终态，也可以得到多个 `accepted/running` 中间结果，最后产生一个终态。中间状态不要求固定三阶段，也不要求每个阶段只出现一次。执行方应在动作结束时提供最终 Outcome；网络或进程故障期间尚无终态，就保留未确认并执行恢复流程，SDK 不会自动补造完成结果。
 
-## 8. Monitor Envelope (监控信件)
+同一 Action 只接受一个不可变终态 Outcome；原终态的相同 ID/内容重放合法，创建第二个终态 ID 则冲突。终态后迟到的进度仍保存，但不回退最终状态；`running` 后迟到的 `accepted` 也不回退当前进度。
 
-### 8.1 概述
-
-Monitor Envelope 允许特殊的 Monitor 客户端订阅并接收其他 Client 的监控数据，用于调试、分析和可视化。所有监控数据通过 Hub 转发，无需 Client 启动额外服务器。
-
-### 8.2 架构
-
-```
-Client (被监控)     Hub (转发)      Monitor (观察)
-      │                │                │
-      │─ enable ──────►│                │
-      │                │◄─ subscribe ───│
-      │                │                │
-      │─ data ────────►│                │
-      │                │─ forward ─────►│
-```
-
-### 8.3 交互类型与数据结构 (MonitorType)
-
-**本节概览 (Mini-TOC)**
-
-- [8.3.1 `ctrl`：控制指令](#831-ctrl-控制指令)
-- [8.3.2 `data`：透传监控数据](#832-data-透传监控数据)
-- [8.3.3 `notify`：监控通知](#833-notify-监控通知)
-
-Monitor 通道作为专用插件性质的存在，其子类型用于控制启停与转发底层报文。
-
-#### 8.3.1 `ctrl` (控制指令)
-
-- **发送方**：Client 或 Monitor 客户端
-- **接收方**：Hub Server
-- **说明**：向 Hub 发送订阅/取消订阅监控队列的动作。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface MonitorCtrlContent {
-  op: "enable" | "disable" | "subscribe" | "unsubscribe";
-  [key: string]: any; // 可选，如 `level: "DEBUG"` 或 `target_client_id: "agent_01"` 等参数
-}
+```mermaid
+sequenceDiagram
+    participant A as Agent 调用方
+    participant H as Hub
+    participant E as Env 执行方
+    A->>A: 保存原 Action
+    A->>H: message.action
+    H->>E: 校验目标工具 Schema 后路由
+    E->>E: 校验权限、保存请求、进入 on_action
+    opt 持续动作
+        E->>H: outcome：accepted / running，各自有 Outcome ID
+        H-->>A: 路由中间回执
+    end
+    E->>E: 保存执行结果和相关世界变更
+    E->>H: outcome：原 Action refs + 最终 status + text
+    H->>A: 返回 Outcome
+    A->>A: on_outcome；保存原文与完整 Envelope
+    A->>H: 持久化后显式发送投递 ACK
+    H->>E: 路由 ACK
+    E->>E: 核对预期接收者，清除对应 outbox
 ```
 
-_注：监控级别 `level` 通常包含 `DEBUG`, `INFO`, `WARNING`, `ERROR`_
+`await_action()` 仅等待终态。超时抛出 `ActionTimeoutError`，其中 `status="unknown"` 是本地未确认状态，不是合法的 wire Outcome.status；它不取消远端动作、不改写已有进度，也不自动重发。等待返回终态也不证明应用已完成持久化或 ACK。
 
-**`MonitorCtrlContent` 负载详情举例**：
-| `op` | 说明 | 附加参数示例数据 |
-|---------|------|---------|
-| `enable` | 启用全局/特定监控 | `{level:string}` |
-| `disable` | 关闭全局/特定监控 | 无附加参数 |
-| `subscribe` | 开始订阅特定 Client 数据 | `{target_client_id:string}` |
-| `unsubscribe` | 取消订阅特定 Client 数据 | `{target_client_id:string}` |
+显式取消、查询历史、主动观测都可以是环境声明的工具，但不是协议内置命令。Demo 的 `cancel/get_operation_result/observe` 只是可运行的业务例子；取消请求自身也有独立 Action 与 Outcome。
 
-#### 8.3.2 `data` (透传监控数据)
+## 5. Event 与解析方式
 
-- **发送方**：Hub Server (转发)
-- **接收方**：Monitor 客户端
-- **说明**：这里包装的是底下各个具体通讯动作产生时快照下来的原始数据。**注意**：Hub 转发时保持 `sender` 为原始 Client ID，这样 Monitor 可以直接从 `envelope.sender` 识别数据来源。
-- **固定数据结构**：
+### 5.1 统一 Content
 
-```typescript
-// Envelope.payload.content 的实际内容
-interface MonitorDataContent {
-  name: "register" | "state_change" | "message_sent" | "message_received";
-  data: any; // 具体的监控负载快照，详情见下表
-  timestamp: number; // 动作发生时的时间戳
-}
-```
+Event 必填 `id/name/data`，可选 `refs`，不允许其他 Content 字段。`name` 为 1..128 字符。身份放在 `content.id/name`；`data` 必须是含自然语言 `text` 的对象，不是 JSON 字符串，也不是裸字符串。
 
-**`MonitorDataContent` 负载详情举例**：
-| `name` | 说明 | `data` 示例数据 |
-|---------|------|---------|
-| `register` | Client 连接并签权信息 | `{client_id:string, role:string, timestamp:number}` |
-| `state_change` | Home/In-Env 状态跃迁 | `{old_state:string, new_state:string, env_id:string}` |
-| `message_sent` | 发信拦截快照 | `{envelope_type:string, recipient:string, payload_type:string,content:any}` |
-| `message_received` | 收信拦截快照 | `{envelope_type:string, sender:string, payload_type:string,content:any}` |
-
-#### 8.3.3 `notify` (监控通知)
-
-- **发送方**：Hub Server
-- **接收方**：Client 或 Monitor 客户端
-- **说明**：配置订阅成功的确认通知。
-- **固定数据结构**：
-
-```typescript
-// Envelope.payload.content 的实际内容
-interface MonitorNotifyContent {
-  event: string; // 通知事件类型，比如 "subscribed", "enabled"
-  msg: string; // 文字说明
-  [key: string]: any; // 可选的附带参数集合，由业务所需自行派生
-}
-```
-
-**`MonitorNotifyContent` 负载详情举例**：
-| `event` | 说明 | `msg` 示例数据 | 附加参数示例数据 (`[key:string]`) |
-|---------|------|---------|---------|
-| `enabled` | 系统反馈已成功启用监控 | `"Monitoring is now enabled"` | 无附加参数 |
-| `subscribed` | 系统反馈已成功订阅某目标 | `"Subscribed to agent_01"` | `{target_client_id:string}` |
-
-### 8.4 完整交互示例
-
-以下展示了启动监控并获取 Agent 动作快照的一套连贯交互。
-
-**步骤 1：Agent 启用监控 (Agent → Hub)**
+无接收方专用 Schema 时，data 只能包含 text：
 
 ```json
 {
-  "id": "uuid_1",
-  "timestamp": 1234567890,
-  "type": "monitor",
+  "id": "event-observation-001",
+  "name": "observation",
+  "data": {"text": "门口出现一个人，正在等待回应。"}
+}
+```
+
+普通未声明名称也按这一默认规则进入模型输入。要附加字段，必须使用接收方已经向该发送者声明的 `data_schema`；不允许靠事件名称猜结构。即使使用专用 Schema，text 仍必填且为 1..32000 字符。`data` 顶层不能出现 `id/event_id/event_type`。
+
+Activity 是 Event 的业务语义，不是新 Payload 类型。例如 Agent 通知 Env 自身活动状态：
+
+```json
+{
+  "id": "event-state-001",
+  "name": "activity.state",
+  "data": {"text": "我正在观察房间。", "state": "working"}
+}
+```
+
+该例由第 3 节的接收 Schema 约束。发言、反应等行为可以通过各自 Event 表达；有结构化控制字段时同样声明 Schema，不新增通用的 `state_change` 消息类型。
+
+### 5.2 refs：有序的 Event 因果关联
+
+Event.refs 若省略，表示未显式给出因果关联；若提供，必须有 1..32 个不重复的逻辑 Event ID，不能引用自身。`[]` 不合法，顺序保持发送方给定的顺序。
+
+```json
+{
+  "id": "event-reply-001",
+  "name": "speech",
+  "refs": ["event-speech-001", "event-observation-001"],
+  "data": {"text": "我听到了；请先看看门口是谁。"}
+}
+```
+
+通用因果关联放在 `content.refs`，不放入 data。业务 Schema 可以定义 `action_id/exchange_id/conversation_id` 等业务关联键，这些键不承担本 Event 的身份或通用 refs 作用。
+
+SDK 拒绝引用已知的非 Event 记录；未知历史引用保留给应用按权限检索原文。refs 不表示到达顺序、执行顺序或 ACK，也不自动保证引用存在、图无环及依赖消息补齐。
+
+### 5.3 模型与程序如何解析
+
+SDK 按 Envelope.type→Payload.type 校验并分派完整 Content 字典；不是先把全部 JSON 塞进模型再由模型判断协议结构。
+
+| 接收方式 | 实际处理 |
+|---|---|
+| `handler="model"` 或默认文本 Event | 单播调用 `on_event(sender, content)`，具备广播分派的客户端调用 `on_broadcast_event()`；应用将 data.text 与必要身份、名称、refs 上下文提供给模型 |
+| `handler="runtime"` | Schema 校验后调用已安装的异步处理器，程序按确定字段处理控制信息 |
+| Outcome | SDK 跟踪结果；具备结果分派的调用方调用 `on_outcome(sender, content)`，程序解析 status/refs，模型读取结果或原因 text |
+| Action | 按工具参数 Schema 校验，再进入 `on_action(sender, content)` 执行业务 |
+
+协议不规定模型提示词模板，也不要求整份 Envelope JSON 进入上下文。runtime 的字段校验不代表业务授权；接收方仍需根据真实 sender、环境成员角色与业务状态决定是否处理。
+
+Event 表达通知、观察、反馈或发言；需要确定执行与原请求的结果流时，用 Action。Event 不自动获得 Outcome。Conversation、群组拆分/合并、成员角色和 Interaction 控制流程由业务规范及接收 Schema 定义，当前 SDK 不自动实现这些生命周期。
+
+模型 Event、Outcome 和 runtime Event 在回调成功后才被标记已处理；同原 ID/内容重放通常不再次调用成功的处理器。回调抛错可重试。持久化与重启后的去重仍由应用日志负责。
+
+## 6. 路由与广播
+
+定向 `message` 要求双方有活动连接并位于同一 Environment；Environment 本身视为该环境的业务对端。Action/Outcome/Event 还要求这对主体已有两个方向的声明。
+
+同环境内 Agent↔Agent、Agent↔Human 私聊只投给 `recipient`，不会附送给 Env。Hub Monitor 可通过独立监控通道观察；私聊业务路由与监控访问应分别理解。
+
+`broadcast` 面向当前环境的成员，使用 `recipient="@env"`，排除发送者自身。Environment 不在成员集合里，因此成员广播不会天然投递给 Env。广播保留原 Envelope.id、时间、发送方及 Payload，所有成员收到同一广播投递。
+
+SDK 的广播 Event 只允许基础 `data: {text}`；Hub 逐个检查实际接收成员的双向契约和接收 Schema。需要不同结构、授权范围或专用 runtime 控制时，对各个已协商接收者逐个单播。`@all` 和其他环境目标不是本 compact Event 的公共广播能力。
+
+默认 Agent 客户端处理 Action、Outcome、Event、Stream；Human 默认处理 Outcome、Event、Stream；Environment 默认处理 Action、Event。需要其他接收方向时应扩展相应回调。仅声明能力或 Hub 路由成功不等于该客户端默认实现了处理行为。
+
+## 7. 投递确认与恢复
+
+ACK 确认物理投递已持久接收，不确认 Action 成功执行；执行结果仍由 Outcome 表达。以下是 ACK 的完整 Envelope：
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440009",
+  "timestamp": 1791590400100,
+  "type": "system",
   "sender": "agent_01",
-  "recipient": "hub",
-  "payload": {
-    "type": "ctrl",
-    "content": {
-      "op": "enable",
-      "level": "DEBUG"
-    }
-  }
-}
-```
-
-**步骤 2：Hub 通知 Agent 已启用 (Hub → Agent)**
-
-```json
-{
-  "id": "uuid_2",
-  "timestamp": 1234567895,
-  "type": "monitor",
-  "sender": "hub",
-  "recipient": "agent_01",
+  "recipient": "env_main",
   "payload": {
     "type": "notify",
     "content": {
-      "event": "enabled",
-      "msg": "Monitoring is now enabled"
+      "event": "VILLAGE_DELIVERY_ACK",
+      "msg": {"envelope_id": "550e8400-e29b-41d4-a716-446655440008"}
     }
   }
 }
 ```
 
-**步骤 3：独立 Monitor 面板订阅特定 Agent (Monitor → Hub)**
+当前原生名字保留为 `VILLAGE_DELIVERY_ACK`，属于 system 控制通道，不是 compact Event。`msg` 恰好包含 UUID 字段 `envelope_id`，指向被确认的原 Envelope.id。Hub 只允许当前成员向所属活动 Environment 发出该 ACK，尚不提供对称的 Env→成员 ACK 路径。
+
+接收方先校验并持久保存完整 Envelope，再显式调用 `send_delivery_ack(original_sender, envelope.id)`；SDK 不自动保存日志或发送持久 ACK。Env 的 `on_delivery_ack(sender, envelope_id)` 应核对 outbox 的预期接收者，并幂等删除该物理投递。单纯 WebSocket 发送完成不证明已持久接收。
+
+应用恢复时应从持久日志还原逻辑身份、原文及原 Action 绑定，重新建立连接与协商，然后查询已声明的历史工具、重发原 Action 或补发原物理投递。`restore_action()` 和 `restore_received_action()` 只还原 SDK 内存绑定，不读取外部日志、不执行原动作。
+
+Hub 的 Action 所有权记录也是内存状态；重启后不能靠 Hub 猜测旧绑定。收到重放 Outcome 的客户端必须已有对应的原调用者/目标记录。世界变更、原结果与执行去重账本由业务事务保障。
+
+## 8. System、Stream 与 Monitor
+
+### 8.1 System
+
+Hub 控制消息通常发给 `hub`；ACK 是第 7 节的成员→Env 例外。
+
+| Payload.type | 当前 Content 约定 |
+|---|---|
+| `ctrl` | 加入：`{"op":"join","env_id":"env_main"}`；离开：`{"op":"leave"}` |
+| `notify` | `event` 与 `msg`，可带通知专用字段；msg 可以是字符串或对象 |
+| `error` | `code` 与自然语言 `msg`，可带 `original_msg_id`、`details` |
+
+Hub 的常用通知包括：`connected`；`joined/left` 携带 `env_id`；发给 Env 的 `client_joined` 在 msg 中包含 `client_id/role`，`client_left` 包含 `client_id/reason`；Env 断开时向成员发送 `environment_closed`。
+
+`system.error` 表示解析、协议或路由等错误，不是业务 Outcome.failed，不能据此补造 Action 终态。本地发送校验失败通常直接抛异常；若未开始网络发送，接收方没有收到该请求。
+
+### 8.2 Stream
+
+原生 Content 常用 `id / sequence / chunk / is_end`；例如下列片段（此处展示 Content）：
 
 ```json
-{
-  "id": "uuid_3",
-  "timestamp": 1234567900,
-  "type": "monitor",
-  "sender": "monitor_01",
-  "recipient": "hub",
-  "payload": {
-    "type": "ctrl",
-    "content": {
-      "op": "subscribe",
-      "target_client_id": "agent_01"
-    }
-  }
-}
+{"id": "stream-001", "sequence": 0, "chunk": "正在说明房间状况。", "is_end": false}
 ```
 
-**步骤 4：Agent 发生系统状态改变并上报 Monitor Envelope (Agent → Hub)**
+Stream Content 仍为可扩展对象，当前没有 compact 式的精确字段与必填约束。单播仍受同环境路由限制，但 SDK/Hub 不要求先完成 compact 能力协商。`sequence/is_end` 不触发 SDK 自动重排、去重、补齐、聚合或跨重连恢复；这些机制由应用定义。流片段不替代最终 Outcome。
 
-```json
-{
-  "id": "uuid_4",
-  "timestamp": 1234568000,
-  "type": "monitor",
-  "sender": "agent_01",
-  "recipient": "hub",
-  "payload": {
-    "type": "data",
-    "content": {
-      "name": "state_change",
-      "data": {
-        "old_state": "HOME",
-        "new_state": "IN_ENV",
-        "env_id": "room_1"
-      },
-      "timestamp": 1234568000
-    }
-  }
-}
+### 8.3 Monitor
+
+Monitor 不使用 Event 的 data.text 规则，遥测 Content 为独立控制契约。
+
+| Payload.type | 当前 Content 约定 |
+|---|---|
+| `ctrl` | `op: enable / disable / subscribe / unsubscribe`；启用可带 `level`，订阅/退订使用 `target_client_id` |
+| `data` | `name`、`data`、`timestamp`；data 是 JSON 遥测内容 |
+| `notify` | `event`、`msg`，以及 `level/target_client_id` 等相关确认字段 |
+
+控制发给 `hub`。确认事件为 `monitoring_enabled / monitoring_disabled / subscribed / unsubscribed`；发送订阅请求不等于 Hub 已确认订阅。
+
+Hub 转发遥测时建立新的 Envelope，以被监控主体为 sender，以实际 Monitor 为 recipient。Hub 的 `message_received` 表示到达 Hub、归于原发送者；`message_sent` 表示离开 Hub、归于目标接收者。SDK 主动报告的同名遥测是不同观察点，不能混用为一条网络时间线。
+
+`enable/disable` 控制 SDK 的主动监控开关；Hub 按订阅关系生成的路由观测并不因此全部停止。Hub Monitor 自动观察通过入口校验的非 monitor 报文，避免监控报文循环。
+
+## 9. 实现职责与验证入口
+
+| 组件 | 已提供的职责 | 应用需补充的职责 |
+|---|---|---|
+| 模型与 SDK | 三层解析、compact 字段校验、接收 Schema、协商缓存、逻辑身份/refs 检查、结果等待与回调分派 | 模型上下文投影、真实工具行为、持久原文与历史检索 |
+| Hub | 连接身份绑定、环境成员路由、双向声明检查、参数校验、已知 Action 所有权、监控及原生 ACK 路由 | 账号鉴权、持久操作账本、业务权限与数据保留策略 |
+| Environment / 接收应用 | 通过本地业务代码实现确定处理 | 世界事务、执行幂等、至少一个最终结果、inbox/outbox、ACK、取消/查询及重启恢复 |
+
+完整示例见 [examples/README.md](../examples/README.md)，接收声明见 [环境配置](../examples/protocol_demo/config/environment.json)、[Agent 配置](../examples/protocol_demo/config/agent.json) 和 [Human 配置](../examples/protocol_demo/config/human.json)。Demo 提供实际 Tool/Event 注册、双向协商、六种 Outcome、模型/runtime 路由、文本私聊、广播、持久恢复、Stream 与 Monitor；其中 SQLite 世界与 outbox 是示例应用实现，不是 SDK 对任意外部服务的事务保证。
+
+在仓库根目录运行：
+
+```bash
+uv run python -m examples.protocol_demo
+uv run python -m examples.protocol_demo --state-dir .demo-state --trace
 ```
 
-**步骤 5：Hub 向订阅者原样派发（Hub → Monitor），注意发送者未变**
+Rich 展示独立的时间轴和因果树：时间轴按实际观测序号与经过时间保留发送开始、到达、分派、落盘、声明安装及 ACK；“已解包”不等于“已安装”或“已执行”。短 ID 别名、`seq/elapsed/stage_id`、模拟停顿与 `flow.*` 都是本地展示记录，不是协议字段。
 
-```json
-{
-  "id": "uuid_5",
-  "timestamp": 1234568005,
-  "type": "monitor",
-  "sender": "agent_01", // 注意: 发送者保持并透传，直接定位追踪来源
-  "recipient": "monitor_01",
-  "payload": {
-    "type": "data",
-    "content": {
-      "name": "state_change",
-      "data": {
-        "old_state": "HOME",
-        "new_state": "IN_ENV",
-        "env_id": "room_1"
-      },
-      "timestamp": 1234568000
-    }
-  }
-}
-```
-
----
-
-## Changelog
-
-- **v1.0** (2026-02-11): 初始版本，定义核心协议
+实现依据：[Envelope](../src/star_protocol/models/envelope.py)、[Payload/Content 校验](../src/star_protocol/models/payloads.py)、[客户端协商与结果管理](../src/star_protocol/client/compact.py)、[Hub 路由](../src/star_protocol/server/router.py)。
