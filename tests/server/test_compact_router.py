@@ -2,7 +2,7 @@ import json
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from star_protocol.models import COMPACT_PROTOCOL, Envelope, MessagePayload
+from star_protocol.models import COMPACT_PROTOCOL, Envelope, MessagePayload, SystemPayload
 from star_protocol.server.router import MessageRouter
 from star_protocol.server.connection import Session, ClientRole
 
@@ -102,16 +102,58 @@ async def test_hub_never_copies_direct_private_event_to_environment():
 
 @pytest.mark.asyncio
 async def test_delivery_ack_authenticates_environment_and_preserves_receiver_identity():
-    from star_protocol.models import SystemPayload
     router, agent, env = router_pair()
     identifier = "550e8400-e29b-41d4-a716-446655440000"
-    ack = Envelope(type="system",sender="agent",recipient="env",payload=SystemPayload(type="notify",content={"event":"VILLAGE_DELIVERY_ACK","msg":{"envelope_id":identifier}}))
-    await router.handle_system_message(ack)
-    assert env.sent[-1]["sender"] == "agent"
-    assert env.sent[-1]["payload"]["content"] == ack.payload.content
-    invalid = ack.model_copy(update={"recipient":"not-my-environment"})
-    await router.handle_system_message(invalid)
+    acknowledgement = Envelope(type="system", sender="agent", recipient="env", payload=SystemPayload(
+        type="notify", content={"event": "ACK", "msg": {"envelope_id": identifier}},
+    ))
+    # ACK is a transport notification and works before capability negotiation.
+    await router.route_message(acknowledgement)
+    await router.route_message(acknowledgement)
+    assert env.sent == [acknowledgement.model_dump(), acknowledgement.model_dump()]
+    assert not agent.sent
+
+    # An active Environment still cannot consume another Environment's ACK.
+    other_env = Socket()
+    router.connection_manager._sessions["other-env"] = Session("other-env", ClientRole.ENVIRONMENT, other_env)
+    invalid = acknowledgement.model_copy(update={"recipient": "other-env"})
+    await router.route_message(invalid)
+    assert len(env.sent) == 2 and not other_env.sent
     assert agent.sent[-1]["payload"]["content"]["code"] == 403
+    assert agent.sent[-1]["payload"]["content"]["original_msg_id"] == invalid.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("msg", [
+    {},
+    {"envelope_id": "550e8400-e29b-41d4-a716-446655440000", "extra": True},
+    {"envelope_id": "logical-event-id"},
+    {"envelope_id": None},
+    "550e8400-e29b-41d4-a716-446655440000",
+])
+async def test_hub_rejects_malformed_ack_without_forwarding(msg):
+    router, agent, env = router_pair()
+    invalid = Envelope(type="system", sender="agent", recipient="env", payload=SystemPayload(
+        type="notify", content={"event": "ACK", "msg": msg},
+    ))
+    await router.route_message(invalid)
+    assert not env.sent
+    assert agent.sent[-1]["payload"]["content"]["code"] == 403
+    assert agent.sent[-1]["payload"]["content"]["original_msg_id"] == invalid.id
+
+
+@pytest.mark.asyncio
+async def test_hub_rejects_ack_from_connected_nonmember():
+    router, _, env = router_pair()
+    outsider = Socket()
+    router.connection_manager._sessions["outsider"] = Session("outsider", ClientRole.AGENT, outsider)
+    invalid = Envelope(type="system", sender="outsider", recipient="env", payload=SystemPayload(
+        type="notify", content={"event": "ACK", "msg": {"envelope_id": "550e8400-e29b-41d4-a716-446655440000"}},
+    ))
+    await router.route_message(invalid)
+    assert not env.sent
+    assert outsider.sent[-1]["payload"]["content"]["code"] == 403
+    assert outsider.sent[-1]["payload"]["content"]["original_msg_id"] == invalid.id
 
 
 @pytest.mark.asyncio

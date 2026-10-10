@@ -114,7 +114,7 @@ Tests cover strict roundtrip, schema/size failures, progress before terminal, id
 
 Persist and validate the complete received Envelope before calling
 `send_delivery_ack(original_sender, envelope.id)`. This sends authenticated
-`system.notify` with `event=VILLAGE_DELIVERY_ACK` and
+`system.notify` with `event=ACK` and
 `msg={envelope_id: <transport UUID>}`. An Environment overrides
 `on_delivery_ack(sender, envelope_id)` to check its recorded expected receiver
 and remove that delivery from its durable queue. Sending over WebSocket alone

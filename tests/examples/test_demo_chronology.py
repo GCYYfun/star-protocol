@@ -69,7 +69,7 @@ def trace():
             actor,
             "demo_env",
             "notify",
-            {"event": "VILLAGE_DELIVERY_ACK", "msg": {"envelope_id": source["id"]}},
+            {"event": "ACK", "msg": {"envelope_id": source["id"]}},
             envelope_type="system",
         )
         wire("wire.send.start", actor, envelope)

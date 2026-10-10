@@ -74,7 +74,7 @@ def test_delivery_replay_reuses_uuid_and_ack_is_only_confirmed_by_environment():
     view, output = display()
     packet = emit_wire(view, "event", {"id": "event-original", "name": "observation", "data": {"text": "原文"}})
     ack = Envelope(type="system", sender="demo_agent", recipient="demo_env", payload=SystemPayload(
-        type="notify", content={"event": "VILLAGE_DELIVERY_ACK", "msg": {"envelope_id": packet.id}}))
+        type="notify", content={"event": "ACK", "msg": {"envelope_id": packet.id}}))
     view.emit({"component": "demo_agent", "event": "wire.send", "envelope": ack.model_dump()})
     view.emit({"component": "environment", "event": "delivery_replay", "envelope": packet.model_dump()})
     view.emit({"component": "demo_agent", "event": "wire.receive", "envelope": packet.model_dump()})

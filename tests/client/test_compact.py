@@ -4,7 +4,7 @@ import pytest
 
 from star_protocol.client import AgentClient, EnvironmentClient
 from star_protocol.client.compact import ActionTimeoutError, ProtocolConflictError
-from star_protocol.models import COMPACT_PROTOCOL, Envelope, MessagePayload
+from star_protocol.models import COMPACT_PROTOCOL, Envelope, MessagePayload, SystemPayload
 
 
 TOOL = {"name": "MOVE", "description": "移动", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"], "additionalProperties": False}}
@@ -272,16 +272,93 @@ async def test_default_environment_callback_replays_original_rejection_on_action
 @pytest.mark.asyncio
 async def test_delivery_ack_routes_actual_sender_to_connector_callback():
     agent, world, _ = await pair()
-    captures=[]
-    async def receive(sender, envelope_id): captures.append((sender,envelope_id))
-    world.on_delivery_ack=receive
-    sent=[]
-    async def capture(frame): sent.append(frame)
-    agent._messaging.send_envelope=capture
-    identifier="550e8400-e29b-41d4-a716-446655440000"
-    await agent.send_delivery_ack("env",identifier)
-    await world._handle_system(sent[0])
-    assert captures==[("agent",identifier)]
+    acknowledgements, notifications, sent = [], [], []
+
+    async def receive_ack(sender, envelope_id):
+        acknowledgements.append((sender, envelope_id))
+
+    async def receive_notify(event, content):
+        notifications.append((event, content))
+
+    async def capture(frame):
+        sent.append(Envelope.model_validate_json(frame.model_dump_json()))
+
+    world.on_delivery_ack = receive_ack
+    world.on_system_notify = receive_notify
+    agent._messaging.send_envelope = capture
+    original = Envelope(
+        sender="env", recipient="agent",
+        payload=MessagePayload(type="event", content={
+            "id": "logical-event-id", "name": "observation", "data": {"text": "收到原文"},
+        }),
+    )
+    await agent.send_delivery_ack("env", original.id)
+    acknowledgement = sent[0]
+    assert acknowledgement.type == "system"
+    assert acknowledgement.sender == "agent" and acknowledgement.recipient == "env"
+    assert acknowledgement.payload.type == "notify"
+    assert acknowledgement.payload.content == {"event": "ACK", "msg": {"envelope_id": original.id}}
+    assert acknowledgement.id != original.id
+    assert acknowledgement.payload.content["msg"]["envelope_id"] != original.payload.content["id"]
+
+    # Retrying the same physical ACK is safe: the durable connector owns
+    # idempotent pending-delivery removal, so the SDK must not swallow retries.
+    await world._messaging.route_message(acknowledgement)
+    await world._messaging.route_message(acknowledgement)
+    assert acknowledgements == [("agent", original.id), ("agent", original.id)]
+    assert notifications == []
+
+    notice = Envelope(type="system", sender="hub", recipient="env", payload=SystemPayload(
+        type="notify", content={"event": "client_joined", "msg": {"client_id": "other", "role": "agent"}},
+    ))
+    await world._messaging.route_message(notice)
+    assert notifications == [("client_joined", notice.payload.content)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("msg", [
+    {},
+    {"envelope_id": "550e8400-e29b-41d4-a716-446655440000", "extra": True},
+    {"envelope_id": "logical-event-id"},
+    {"envelope_id": None},
+    "550e8400-e29b-41d4-a716-446655440000",
+])
+async def test_client_rejects_malformed_ack_before_callbacks(msg, caplog):
+    world = World()
+    acknowledgements, notifications = [], []
+
+    async def receive_ack(sender, envelope_id):
+        acknowledgements.append((sender, envelope_id))
+
+    async def receive_notify(event, content):
+        notifications.append((event, content))
+
+    world.on_delivery_ack = receive_ack
+    world.on_system_notify = receive_notify
+    acknowledgement = Envelope(type="system", sender="agent", recipient="env", payload=SystemPayload(
+        type="notify", content={"event": "ACK", "msg": msg},
+    ))
+    with pytest.raises((ValueError, TypeError, AttributeError)):
+        await world._handle_system(acknowledgement)
+    # The public message dispatcher isolates handler errors and logs them;
+    # malformed ACKs still cannot reach either application callback.
+    await world._messaging.route_message(acknowledgement)
+    assert any("Error routing message:" in record.message for record in caplog.records)
+    assert acknowledgements == [] and notifications == []
+
+
+@pytest.mark.asyncio
+async def test_client_does_not_send_ack_for_logical_content_id():
+    agent = Agent()
+    sent = []
+
+    async def capture(frame):
+        sent.append(frame)
+
+    agent._messaging.send_envelope = capture
+    with pytest.raises(ValueError):
+        await agent.send_delivery_ack("env", "logical-event-id")
+    assert sent == []
 
 
 @pytest.mark.asyncio

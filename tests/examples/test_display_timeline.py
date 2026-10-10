@@ -100,7 +100,7 @@ def test_ack_started_or_persisted_is_not_yet_sent_or_confirmed():
         type="event", content={"id": "event", "name": "observation", "data": {"text": "原文"}})).model_dump()
     display.emit({"event": "wire.receive", "component": "demo_agent", "envelope": packet})
     ack = Envelope(type="system", sender="demo_agent", recipient="demo_env", payload=SystemPayload(
-        type="notify", content={"event": "VILLAGE_DELIVERY_ACK", "msg": {"envelope_id": packet["id"]}})).model_dump()
+        type="notify", content={"event": "ACK", "msg": {"envelope_id": packet["id"]}})).model_dump()
     display.emit({"event": "wire.send.start", "component": "demo_agent", "envelope": ack})
     assert not display.deliveries[packet["id"]]["ack_sent"]
     display.emit({"event": "wire.send", "component": "demo_agent", "envelope": ack})

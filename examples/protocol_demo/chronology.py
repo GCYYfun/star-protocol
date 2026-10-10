@@ -191,7 +191,7 @@ def chronology_checks(records: list[dict]) -> dict[str, bool]:
                     row,
                 )
                 coverage["returned"] += 1
-            if kind == "notify" and content.get("event") == "VILLAGE_DELIVERY_ACK":
+            if kind == "notify" and content.get("event") == "ACK":
                 target = content.get("msg", {}).get("envelope_id")
                 delivery = deliveries.get((component, target))
                 _require(
@@ -239,7 +239,7 @@ def chronology_checks(records: list[dict]) -> dict[str, bool]:
             if kind == "specification":
                 spec_arrivals.setdefault((component, sender), []).append(row)
                 pending_specs.setdefault((component, sender), []).append(row)
-            if kind == "notify" and content.get("event") == "VILLAGE_DELIVERY_ACK":
+            if kind == "notify" and content.get("event") == "ACK":
                 target = content.get("msg", {}).get("envelope_id")
                 ack_arrivals[(component, sender, target)] = row
 

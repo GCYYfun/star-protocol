@@ -11,12 +11,9 @@ from star_protocol.server.connection import SessionManager, ClientRole
 from star_protocol.models import (
     Envelope,
     SystemPayload,
-    MessageActionContent,
-    MessageEventContent,
     MonitorPayload,
     MonitorType,
     EnvelopeType,
-    gen_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -281,7 +278,7 @@ class MessageRouter:
         """
         payload = envelope.payload
 
-        if payload.type == "notify" and payload.content.get("event") == "VILLAGE_DELIVERY_ACK":
+        if payload.type == "notify" and payload.content.get("event") == "ACK":
             source = self.connection_manager.get_session(envelope.sender)
             target = self.connection_manager.get_session(envelope.recipient)
             msg = payload.content.get("msg")

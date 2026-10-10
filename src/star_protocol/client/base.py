@@ -1,22 +1,17 @@
 """客户端基类"""
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Dict
-import websockets
 import uuid
 
 from star_protocol.models import (
     Envelope,
     SystemPayload,
-    MessagePayload,
-    BroadcastPayload,
     ClientState,
 )
 from star_protocol.exceptions import (
     ConnectionError as StarConnectionError,
-    InvalidStateError,
 )
 from star_protocol.client.compact import CompactClientMixin
 from star_protocol.client.core import (
@@ -328,7 +323,7 @@ class BaseClient(CompactClientMixin, MonitorableMixin, ReconnectableMixin, ABC):
         elif payload.type == "notify":
             content = payload.content  # TypedDict → 本质是 dict
             event = content.get("event", "") if isinstance(content, dict) else ""
-            if event == "VILLAGE_DELIVERY_ACK":
+            if event == "ACK":
                 msg = content.get("msg")
                 if not isinstance(msg, dict) or set(msg) != {"envelope_id"}:
                     raise ValueError("Invalid delivery ACK body")
@@ -357,7 +352,7 @@ class BaseClient(CompactClientMixin, MonitorableMixin, ReconnectableMixin, ABC):
         uuid.UUID(envelope_id)
         await self.send(Envelope(type="system", sender=self.client_id, recipient=recipient,
                                 payload=SystemPayload(type="notify", content={
-                                    "event": "VILLAGE_DELIVERY_ACK", "msg": {"envelope_id": envelope_id}})))
+                                    "event": "ACK", "msg": {"envelope_id": envelope_id}})))
 
     async def on_delivery_ack(self, sender: str, envelope_id: str) -> None:
         """Connector checks expected receiver and its durable pending delivery."""

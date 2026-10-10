@@ -213,7 +213,7 @@ class ProtocolDisplay:
                 self.alias("stream", stream_id)
                 stream = self.streams.setdefault(stream_id, {"sender": envelope["sender"], "recipient": envelope["recipient"], "chunks": OrderedDict()})
                 stream["chunks"][content.get("sequence", len(stream["chunks"]))] = content
-            if kind == "notify" and content.get("event") == "VILLAGE_DELIVERY_ACK" and name in {"wire.send", "send", "delivery_replay"}:
+            if kind == "notify" and content.get("event") == "ACK" and name in {"wire.send", "send", "delivery_replay"}:
                 target = content.get("msg", {}).get("envelope_id")
                 if target in self.deliveries:
                     self.deliveries[target]["ack_sent"] = True
@@ -529,7 +529,7 @@ class ProtocolDisplay:
                     subject += " · refs → " + ", ".join(self.alias("event", ref) for ref in content["refs"])
             elif kind == "notify":
                 subject += " " + str(content.get("event", "?"))
-                if content.get("event") == "VILLAGE_DELIVERY_ACK":
+                if content.get("event") == "ACK":
                     target = content.get("msg", {}).get("envelope_id")
                     if target:
                         subject += " → " + self.alias("delivery", target)
